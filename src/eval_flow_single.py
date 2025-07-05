@@ -326,81 +326,82 @@ def main(
     results = collections.defaultdict(list)
 
 
-    for inference_delay in [0, 1, 2]:
+    for inference_delay in [1, 2]:
     # for inference_delay in [0]:
-        # for execute_horizon in range(max(1, inference_delay), 8 - inference_delay + 1):
-        for vel_target in [0., 0.3, 0.6, 0.9, 1.2,]:
-            execute_horizon=max(1, inference_delay)
+        for execute_horizon in range(max(1, inference_delay), 8 - inference_delay + 1):
+            # execute_horizon=max(1, inference_delay)
+            for vel_target in [0.7, 0.8, 0.9, 1.0, 1.2]:
+                #
 
-            levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4) #change to vel_y=something here if needed
-            
-            print(f"{inference_delay=} {execute_horizon=}")
-            c = dataclasses.replace(
-                config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=NaiveMethodConfig()
-            )
-            if weak_state_dicts is None:
-                out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
-            else:
-                out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
-            for i in range(len(level_paths)):
-                for k, v in out.items():
-                    results[k].append(v[i])
-                results["delay"].append(inference_delay)
-                results["method"].append("naive")
-                results["level"].append(level_paths[i])
-                results["execute_horizon"].append(execute_horizon)
-                results["env_vel"].append(vel_target)
+                levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4) #change to vel_y=something here if needed
+                
+                print(f"{inference_delay=} {execute_horizon=}")
+                c = dataclasses.replace(
+                    config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=NaiveMethodConfig()
+                )
+                if weak_state_dicts is None:
+                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
+                else:
+                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+                for i in range(len(level_paths)):
+                    for k, v in out.items():
+                        results[k].append(v[i])
+                    results["delay"].append(inference_delay)
+                    results["method"].append("naive")
+                    results["level"].append(level_paths[i])
+                    results["execute_horizon"].append(execute_horizon)
+                    results["env_vel"].append(vel_target)
 
-            c = dataclasses.replace(
-                config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig()
-            )
-            if weak_state_dicts is None:
-                out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
-            else:
-                out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
-            for i in range(len(level_paths)):
-                for k, v in out.items():
-                    results[k].append(v[i])
-                results["delay"].append(inference_delay)
-                results["method"].append("realtime")
-                results["level"].append(level_paths[i])
-                results["execute_horizon"].append(execute_horizon)
-                results["env_vel"].append(vel_target)
+                c = dataclasses.replace(
+                    config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig()
+                )
+                if weak_state_dicts is None:
+                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
+                else:
+                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+                for i in range(len(level_paths)):
+                    for k, v in out.items():
+                        results[k].append(v[i])
+                    results["delay"].append(inference_delay)
+                    results["method"].append("realtime")
+                    results["level"].append(level_paths[i])
+                    results["execute_horizon"].append(execute_horizon)
+                    results["env_vel"].append(vel_target)
 
-            c = dataclasses.replace(
-                config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig()
-            )
-            if weak_state_dicts is None:
-                out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
-            else:
-                out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
-            for i in range(len(level_paths)):
-                for k, v in out.items():
-                    results[k].append(v[i])
-                results["delay"].append(inference_delay)
-                results["method"].append("bid")
-                results["level"].append(level_paths[i])
-                results["execute_horizon"].append(execute_horizon)
-                results["env_vel"].append(vel_target)
+                c = dataclasses.replace(
+                    config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig()
+                )
+                if weak_state_dicts is None:
+                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
+                else:
+                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+                for i in range(len(level_paths)):
+                    for k, v in out.items():
+                        results[k].append(v[i])
+                    results["delay"].append(inference_delay)
+                    results["method"].append("bid")
+                    results["level"].append(level_paths[i])
+                    results["execute_horizon"].append(execute_horizon)
+                    results["env_vel"].append(vel_target)
 
-            c = dataclasses.replace(
-                config,
-                inference_delay=inference_delay,
-                execute_horizon=execute_horizon,
-                method=RealtimeMethodConfig(prefix_attention_schedule="zeros"),
-            )
-            if weak_state_dicts is None:
-                out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
-            else:
-                out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
-            for i in range(len(level_paths)):
-                for k, v in out.items():
-                    results[k].append(v[i])
-                results["delay"].append(inference_delay)
-                results["method"].append("hard_masking")
-                results["level"].append(level_paths[i])
-                results["execute_horizon"].append(execute_horizon)
-                results["env_vel"].append(vel_target)
+                c = dataclasses.replace(
+                    config,
+                    inference_delay=inference_delay,
+                    execute_horizon=execute_horizon,
+                    method=RealtimeMethodConfig(prefix_attention_schedule="zeros"),
+                )
+                if weak_state_dicts is None:
+                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
+                else:
+                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+                for i in range(len(level_paths)):
+                    for k, v in out.items():
+                        results[k].append(v[i])
+                    results["delay"].append(inference_delay)
+                    results["method"].append("hard_masking")
+                    results["level"].append(level_paths[i])
+                    results["execute_horizon"].append(execute_horizon)
+                    results["env_vel"].append(vel_target)
             #GFD
             # c = dataclasses.replace(
             #     config,

@@ -64,6 +64,6 @@
 
 # uv run src/eval_flow_single.py --run_path ./logs-bc/snowy-sky-20/ --output-dir ./logs-eval-dr/hard_lunar_lander --level-paths "worlds/l/hard_lunar_lander.json"
 
-uv run src/eval_flow_single.py --run_path ./logs-bc/snowy-sky-20/ --output-dir ./logs-eval-dr/hard_lunar_lander_r2 --level-paths "worlds/l/hard_lunar_lander.json"
+uv run src/eval_flow_single.py --run_path ./logs-bc/snowy-sky-20/ --output-dir ./logs-eval-dr/hard_lunar_lander_r3 --level-paths "worlds/l/hard_lunar_lander.json"
 
 
