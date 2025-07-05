@@ -325,10 +325,10 @@ def main(
     results = collections.defaultdict(list)
 
 
-    for inference_delay in [0, 1, 4]:
+    for inference_delay in [0, 1, 2]:
     # for inference_delay in [0]:
         # for execute_horizon in range(max(1, inference_delay), 8 - inference_delay + 1):
-        for vel_target in [0., 0.5, 1.0, 1.5, 2.0]:
+        for vel_target in [0., 0.3, 0.6, 0.9, 1.2,]:
             execute_horizon=max(1, inference_delay)
 
             levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4) #change to vel_y=something here if needed
