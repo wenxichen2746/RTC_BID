@@ -264,3 +264,63 @@ class FlowPolicy(nnx.Module):
         u_t = action - noise
         pred = self(obs, x_t, time)
         return jnp.mean(jnp.square(pred - u_t))
+
+
+    #customized
+    def guided_flow_action(
+        self,
+        rng: jax.Array,
+        obs: jax.Array,
+        num_steps: int,
+        prev_action_chunk: jax.Array,  # [batch, horizon, action_dim]
+        inference_delay: int,
+        prefix_attention_horizon: int,
+        prefix_attention_schedule: PrefixAttentionSchedule,
+        max_guidance_weight: float,
+        weak_policy: Self,
+        n_weak_samples: int,
+    ) -> jax.Array:
+        dt = 1 / num_steps
+
+        def step(carry, _):
+            x_t, time = carry
+
+            @functools.partial(jax.vmap, in_axes=(0, 0, 0, None))  # over batch
+            def corrected_velocity(obs, x_t, y, t):
+                def denoiser(x_t):
+                    v_t = self(obs[None], x_t[None], t)[0]
+                    return x_t + v_t * (1 - t), v_t
+
+                x_1, vjp_fun, v_t = jax.vjp(denoiser, x_t, has_aux=True)
+
+                weights = get_prefix_weights(
+                    inference_delay, prefix_attention_horizon, self.action_chunk_size, prefix_attention_schedule
+                )
+                # Backward loss correction
+                inpaint_error = (y - x_1) * weights[:, None]
+                inpaint_correction = vjp_fun(inpaint_error)[0]
+
+                # Forward loss correction
+                strong_action = x_1
+                obs = einops.repeat(obs, "b ... -> (n b) ...", n=n_weak_samples)
+                weak_actions = einops.rearrange(
+                weak_policy.action(rng, obs, num_steps), "(n b) h d -> n b h d", n=n_weak_samples
+                )
+
+                
+
+
+                # Combine backward + forward correction
+                inv_r2 = (t**2 + (1 - t) ** 2) / ((1 - t) ** 2)
+                c = jnp.nan_to_num((1 - t) / t, posinf=max_guidance_weight)
+                guidance_weight = jnp.minimum(c * inv_r2, max_guidance_weight)
+
+                total_correction = inpaint_correction + guidance_weight[:, None, None] * forward_grad
+                return v_t + total_correction
+
+            v_t = corrected_velocity(obs, x_t, prev_action_chunk, time)
+            return (x_t + dt * v_t, time + dt), None
+
+        noise = jax.random.normal(rng, shape=(obs.shape[0], self.action_chunk_size, self.action_dim))
+        (x_1, _), _ = jax.lax.scan(step, (noise, 0.0), length=num_steps)
+        return x_1

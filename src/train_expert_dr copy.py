@@ -1,9 +1,11 @@
 import dataclasses
+from dataclasses import replace
 import functools
 import json
 import pathlib
 import pickle
 from typing import Sequence
+import copy
 
 from flax import struct
 import flax.nnx as nnx
@@ -25,15 +27,15 @@ import wandb
 @dataclasses.dataclass
 class Config:
     level_paths: Sequence[str] = (
-        "worlds/l/grasp_easy.json",
+        # "worlds/l/grasp_easy.json",
         # "worlds/l/catapult.json",
         # "worlds/l/cartpole_thrust.json",
-        # "worlds/l/hard_lunar_lander.json",
+        "worlds/l/hard_lunar_lander.json",
         # "worlds/l/mjc_half_cheetah.json",
         # "worlds/l/mjc_swimmer.json",
         # "worlds/l/mjc_walker.json",
         # "worlds/l/h17_unicycle.json",
-        # "worlds/l/chain_lander.json",
+        # "worlds/l/chain_lander_dr.json",
         # "worlds/l/catcher_v3.json",
         # "worlds/l/trampoline.json",
         # "worlds/l/car_launch.json",
@@ -54,7 +56,9 @@ class Config:
     layer_width: int = 256
     grad_norm_clip: float = 1.0
     lr: float = 3e-4
-
+    env_wall_y: float = 0.7   # 0.3 - 5.0
+    env_target_x: float = 1.0
+    wandb_name: str = "my-default-experiment-name"
 
 LOG_DIR = pathlib.Path("logs-expert")
 WANDB_PROJECT = "rtc-kinetix-expert"
@@ -219,6 +223,36 @@ class ObsHistoryWrapper(wrappers.UnderspecifiedEnvWrapper):
         return env_state.original_obs
 
 
+
+class RandomizedResetWrapper(wrappers.UnderspecifiedEnvWrapper):
+    def __init__(self, env, polygon_index=4, x_range=(0.1, 1.0), y_range=(0.7, 5.0)):
+        super().__init__(env)
+        self.polygon_index = polygon_index
+        self.x_range = x_range
+        self.y_range = y_range
+
+    def reset_to_level(self, rng, level, params):
+        # level: batched level object (num_envs, ...)
+        batch_size = level.polygon.position.shape[0]
+
+        key_x, key_y = jax.random.split(rng)
+        rand_x = jax.random.uniform(key_x, (batch_size,), minval=self.x_range[0], maxval=self.x_range[1])
+        rand_y = jax.random.uniform(key_y, (batch_size,), minval=self.y_range[0], maxval=self.y_range[1])
+
+        def set_pos(single_level, x, y):
+            pos = single_level.polygon.position
+            pos = pos.at[self.polygon_index].set(jnp.array([x, y]))
+            poly = replace(single_level.polygon, position=pos)
+            return replace(single_level, polygon=poly)
+
+        # Randomize polygon position for each env in the batch
+        new_levels = jax.vmap(set_pos)(level, rand_x, rand_y)
+        return self._env.reset_to_level(rng, new_levels, params)
+
+    def reset(self, rng, params):
+        # If you want to randomize on default reset as well, do something similar here.
+        return self._env.reset(rng, params)
+
 def make_squashed_normal_diag(mean, std, num_motor_bindings: int):
     bijector = tfp.bijectors.Blockwise(
         [tfp.bijectors.Tanh(), tfp.bijectors.Sigmoid()],
@@ -227,6 +261,48 @@ def make_squashed_normal_diag(mean, std, num_motor_bindings: int):
         validate_args=True,
     )
     return tfp.distributions.TransformedDistribution(tfp.distributions.MultivariateNormalDiag(mean, std), bijector)
+
+
+def randomize_polygon_position(levels, index=4):
+    # levels: pytree of stacked levels (batched)
+    # This function expects levels to be a pytree with batch as first dim
+    batch_size = levels.polygon.position.shape[0]
+    new_levels = []
+    for batch_idx in range(batch_size):
+        level_mod = copy.deepcopy(jax.tree.map(lambda x: x[batch_idx], levels))
+        key = jax.random.PRNGKey(batch_idx)
+        key, key_x, key_y = jax.random.split(key, 3)
+        rand_x = jax.random.uniform(key_x, (), minval=0.1, maxval=1.0)
+        rand_y = jax.random.uniform(key_y, (), minval=0.7, maxval=5.0)
+        current_pos = level_mod.polygon.position[index]
+        new_pos = jnp.array([current_pos[0], rand_y])
+        new_positions = level_mod.polygon.position.at[index].set(new_pos)
+        new_polygon = replace(level_mod.polygon, position=new_positions)
+        level_mod = replace(level_mod, polygon=new_polygon)
+        new_levels.append(level_mod)
+    # Stack back into a batch
+    return jax.tree.map(lambda *x: jnp.stack(x), *new_levels)
+
+
+def change_polygon_position(levels, pos_x=None, pos_y=None, index=4):
+    # levels: pytree of stacked levels (batched)
+    batch_size = levels.polygon.position.shape[0]
+    new_levels = []
+    for batch_idx in range(batch_size):
+        level_mod = copy.deepcopy(jax.tree.map(lambda x: x[batch_idx], levels))
+
+        current_pos = level_mod.polygon.position[index]
+        new_x = pos_x if pos_x is not None else current_pos[0]
+        new_y = pos_y if pos_y is not None else current_pos[1]
+        new_pos = jnp.array([new_x, new_y])
+
+        new_positions = level_mod.polygon.position.at[index].set(new_pos)
+        new_polygon = replace(level_mod.polygon, position=new_positions)
+        level_mod = replace(level_mod, polygon=new_polygon)
+        new_levels.append(level_mod)
+
+    return jax.tree.map(lambda *x: jnp.stack(x), *new_levels)
+
 
 
 class Agent(nnx.Module):
@@ -320,6 +396,7 @@ def main(config: Config):
     static_env_params = kenv_state.StaticEnvParams(**LARGE_ENV_PARAMS, frame_skip=FRAME_SKIP)
     env_params = kenv_state.EnvParams()
     env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
+    # env = RandomizedResetWrapper(env, polygon_index=4)   # You can change index or ranges as needed
     env = BatchEnvWrapper(
         wrappers.LogWrapper(
             DenseRewardWrapper(
@@ -330,6 +407,8 @@ def main(config: Config):
     )
 
     levels = load_levels(config.level_paths, static_env_params, env_params)
+    # levels = randomize_polygon_position(levels, index=4)
+    levels = change_polygon_position(levels, pos_x=config.env_target_x, pos_y=None, index=4)
     static_env_params = static_env_params.replace(screen_dim=SCREEN_DIM)
 
     batch_size = config.num_envs * config.num_steps
@@ -509,7 +588,7 @@ def main(config: Config):
         video = render_video(jax.tree.map(lambda x: x[0], rollout))
         return update_carry, (jax.tree.map(jnp.mean, info), video)
 
-    wandb.init(project=WANDB_PROJECT)
+    wandb.init(project=WANDB_PROJECT, name=config.wandb_name)
     wandb.define_metric("num_env_steps")
     wandb.define_metric("*", step_metric="num_env_steps")
     pbar = tqdm.tqdm(total=config.num_updates * config.num_envs * config.num_steps, dynamic_ncols=True)
@@ -531,9 +610,7 @@ def main(config: Config):
                 level_info = jax.tree.map(lambda x: x[seed_idx, level_idx].item(), info)
                 wandb.log({f"{level_name}/{seed_idx}/{k}": v for k, v in level_info.items()}, step=update_idx)
 
-                # log_dir = LOG_DIR / wandb.run.name / f"seed_{seed_idx}" / str(update_idx)
-                run_name = wandb.run.name or "unnamed-run"
-                log_dir = LOG_DIR / run_name / f"seed_{seed_idx}" / str(update_idx)
+                log_dir = LOG_DIR / wandb.run.name / f"seed_{seed_idx}" / str(update_idx)
                 stats_dir = log_dir / "stats"
                 stats_dir.mkdir(parents=True, exist_ok=True)
                 with (stats_dir / f"{level_name}.json").open("w") as f:
