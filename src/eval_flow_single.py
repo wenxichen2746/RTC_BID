@@ -24,6 +24,7 @@ import tyro
 import copy
 import model as _model
 import train_expert
+from dataclasses import replace
 
 def change_polygon_position_and_velocity(levels, pos_x=None, pos_y=None, vel_x=None, vel_y=None, index=4):
     # levels: pytree of stacked levels (batched)
