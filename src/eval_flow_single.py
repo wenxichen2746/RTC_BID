@@ -21,7 +21,7 @@ import kinetix.environment.wrappers as wrappers
 import kinetix.render.renderer_pixels as renderer_pixels
 import pandas as pd
 import tyro
-
+import copy
 import model as _model
 import train_expert
 
