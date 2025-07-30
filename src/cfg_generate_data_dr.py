@@ -63,9 +63,7 @@ def main(config: Config):
     env = cfg_train_expert.BatchEnvWrapper(
         wrappers.LogWrapper(
             wrappers.AutoReplayWrapper(
-                cfg_train_expert.ActionHistoryWrapper(
-                    cfg_train_expert.ObsHistoryWrapper(cfg_train_expert.NoisyActionWrapper(env), 4)
-                )
+                    wrappers.AutoReplayWrapper(cfg_train_expert.ActObsHistoryWrapper(cfg_train_expert.NoisyActionWrapper(env), act_history_length=4, obs_history_length=1))
             )
         ),
         config.num_envs,

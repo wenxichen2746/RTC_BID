@@ -116,19 +116,36 @@ def main(config: Config):
 
     obs_dim = data.obs.shape[-1]
     action_dim = env.action_space(env_params).shape[0]
+    obs_dim_context = data.obs.shape[-1]
+    action_dim = env.action_space(env_params).shape[0]
+
+    context_act_len = config.act_history_length * action_dim
+    assert context_act_len <= obs_dim_context
+    context_obs_len = obs_dim_context - context_act_len
+    context_dim = obs_dim_context
+
+    context_obs_index = (0, context_obs_len)
+    context_act_index = (context_obs_len, context_obs_len + context_act_len)
 
     @functools.partial(jax.jit, in_shardings=sharding, out_shardings=sharding)
     @jax.vmap
     def init(rng: jax.Array) -> EpochCarry:
         rng, key = jax.random.split(rng)
-        policy = _model.FlowPolicy(
-            obs_dim=obs_dim,
+        policy = _model.FlowPolicyCFG2(
+            context_dim=context_dim,
             action_dim=action_dim,
             config=config.eval.model,
             rngs=nnx.Rngs(key),
+            context_act_index=context_act_index,
+            context_obs_index=context_obs_index,
         )
         total_params = sum(x.size for x in jax.tree.leaves(nnx.state(policy, nnx.Param)))
         print(f"Total params: {total_params:,}")
+
+        def wd_mask(path, _):
+            name = "/".join(path)
+            return not ("null_act_embed" in name or "null_obs_embed" in name)
+
         optimizer = nnx.Optimizer(
             policy,
             optax.chain(
@@ -136,11 +153,14 @@ def main(config: Config):
                 optax.adamw(
                     optax.warmup_constant_schedule(0, config.learning_rate, config.lr_warmup_steps),
                     weight_decay=config.weight_decay,
+                    mask=wd_mask,
                 ),
             ),
         )
         graphdef, train_state = nnx.split((policy, optimizer))
         return EpochCarry(rng, train_state, graphdef)
+
+
 
     @functools.partial(jax.jit, donate_argnums=(0,), in_shardings=sharding, out_shardings=sharding)
     @jax.vmap
@@ -151,22 +171,23 @@ def main(config: Config):
 
             rng, key = jax.random.split(rng)
 
-            def loss_fn(policy: _model.FlowPolicy):
-                obs = data.obs[batch_idxs]
+            def loss_fn(policy: _model.FlowPolicyCFG2):
+                context = data.obs[batch_idxs]
                 action_chunks = data.action[batch_idxs[:, None] + jnp.arange(action_chunk_size)[None, :]]
-                # zero actions after done
                 done_chunks = data.done[batch_idxs[:, None] + jnp.arange(action_chunk_size)[None, :]]
-                done_idxs = jnp.where(
-                    jnp.any(done_chunks, axis=-1),
-                    jnp.argmax(done_chunks, axis=-1),
-                    action_chunk_size,
-                )
+                done_idxs = jnp.where(jnp.any(done_chunks, axis=-1), jnp.argmax(done_chunks, axis=-1), action_chunk_size)
                 action_chunks = jnp.where(
                     jnp.arange(action_chunk_size)[None, :, None] >= done_idxs[:, None, None],
                     0.0,
                     action_chunks,
                 )
-                return policy.loss(key, obs, action_chunks)
+                return policy.loss(
+                    key,
+                    context=context,
+                    action=action_chunks,
+                    p_drop_act=config.p_drop_act,
+                    p_drop_obs=config.p_drop_obs,
+                )
 
             loss, grads = nnx.value_and_grad(loss_fn)(policy)
             info = {"loss": loss, "grad_norm": optax.global_norm(grads)}

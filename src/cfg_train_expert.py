@@ -43,7 +43,7 @@ class Config:
     seed: int = 32
     num_seeds: int = 8
     log_interval: int = 20
-    num_updates: int = 500 #1000
+    num_updates: int = 1000 #1000
     num_steps: int = 256
     num_envs: int = 256
     num_minibatches: int = 8
@@ -463,7 +463,7 @@ def main(config: Config):
     env = BatchEnvWrapper(
         wrappers.LogWrapper(
             DenseRewardWrapper(
-                wrappers.AutoReplayWrapper(ActObsHistoryWrapper(NoisyActionWrapper(env), act_history_length=4, obs_history_length=2))
+                wrappers.AutoReplayWrapper(ActObsHistoryWrapper(NoisyActionWrapper(env), act_history_length=4, obs_history_length=1))
             )
         ),
         config.num_envs,

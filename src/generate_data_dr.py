@@ -63,10 +63,12 @@ def main(config: Config):
     env = train_expert_dr.BatchEnvWrapper(
         wrappers.LogWrapper(
             wrappers.AutoReplayWrapper(
-                wrappers.AutoReplayWrapper(train_expert_dr.ActObsHistoryWrapper(train_expert_dr.NoisyActionWrapper(env), act_history_length=4, obs_history_length=1))
+                train_expert_dr.ActionHistoryWrapper(
+                    train_expert_dr.ObsHistoryWrapper(train_expert_dr.NoisyActionWrapper(env), 4)
+                )
+            )
         ),
         config.num_envs,
-    )
     )
 
     # --- Policy selection logic for a single level ---
