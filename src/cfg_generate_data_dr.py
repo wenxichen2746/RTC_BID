@@ -17,7 +17,7 @@ import numpy as np
 import tqdm_loggable.auto as tqdm
 import tyro
 
-import train_expert_dr
+import cfg_train_expert
 
 @dataclasses.dataclass
 class Config:
@@ -54,19 +54,21 @@ def main(config: Config):
         f"Generating {num_steps_per_env * config.num_envs:_} steps with {config.num_envs} environments ({num_steps_per_env} steps per env)"
     )
 
-    static_env_params = kenv_state.StaticEnvParams(**train_expert_dr.LARGE_ENV_PARAMS, frame_skip=train_expert_dr.FRAME_SKIP)
+    static_env_params = kenv_state.StaticEnvParams(**cfg_train_expert.LARGE_ENV_PARAMS, frame_skip=cfg_train_expert.FRAME_SKIP)
     env_params = kenv_state.EnvParams()
-    level, _, _ = train_expert_dr.saving.load_from_json_file(config.level_path)
+    level, _, _ = cfg_train_expert.saving.load_from_json_file(config.level_path)
 
     env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
-    env = train_expert_dr.RandomizedResetWrapper(env, polygon_index=4)
-    env = train_expert_dr.BatchEnvWrapper(
+    env = cfg_train_expert.RandomizedResetWrapper(env, polygon_index=4)
+    env = cfg_train_expert.BatchEnvWrapper(
         wrappers.LogWrapper(
             wrappers.AutoReplayWrapper(
-                wrappers.AutoReplayWrapper(train_expert_dr.ActObsHistoryWrapper(train_expert_dr.NoisyActionWrapper(env), act_history_length=4, obs_history_length=1))
+                cfg_train_expert.ActionHistoryWrapper(
+                    cfg_train_expert.ObsHistoryWrapper(cfg_train_expert.NoisyActionWrapper(env), 4)
+                )
+            )
         ),
         config.num_envs,
-    )
     )
 
     # --- Policy selection logic for a single level ---
@@ -116,14 +118,14 @@ def main(config: Config):
 
             @jax.vmap
             def get_action(key, obs, policy_idx):
-                agent = train_expert_dr.Agent(obs_dim, action_dim, 1, rngs=nnx.Rngs(0))
+                agent = cfg_train_expert.Agent(obs_dim, action_dim, 1, rngs=nnx.Rngs(0))
                 graphdef, state = nnx.split(agent)
                 state.replace_by_pure_dict(jax.tree.map(lambda x: x[policy_idx], state_dict))
                 agent = nnx.merge(graphdef, state)
                 mean, std = agent.action(obs)
                 if config.action_sample_std is not None:
                     std = jnp.full_like(mean, config.action_sample_std)
-                action_dist = train_expert_dr.make_squashed_normal_diag(mean, std, static_env_params.num_motor_bindings)
+                action_dist = cfg_train_expert.make_squashed_normal_diag(mean, std, static_env_params.num_motor_bindings)
                 return action_dist.sample(seed=key)
 
             rng, key = jax.random.split(carry.rng)
@@ -138,7 +140,7 @@ def main(config: Config):
                 if k in ["returned_episode_returns", "returned_episode_lengths", "returned_episode_solved"]
             }
             return StepCarry(rng, next_obs, next_env_state, next_policy_idxs), Data(
-                train_expert_dr.ObsHistoryWrapper.get_original_obs(carry.env_state),
+                cfg_train_expert.ObsHistoryWrapper.get_original_obs(carry.env_state),
                 action,
                 done,
                 info["returned_episode_solved"],

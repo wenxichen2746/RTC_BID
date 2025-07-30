@@ -26,4 +26,6 @@
 # uv run src/train_expert_dr.py --config.level-paths "worlds/l/hard_lunar_lander.json"  --config.env_target_x 4.0 --config.wandb_name "hard_lunar_lander_t4"
 
 #new dr script
-uv run src/train_expert_dr.py --config.level-paths "worlds/l/hard_lunar_lander.json"  --config.wandb_name "hard_lunar_lander_t1-4_r2"
+# uv run src/train_expert_dr.py --config.level-paths "worlds/l/hard_lunar_lander.json"  --config.wandb_name "hard_lunar_lander_t1-4_r2"
+#0730 dr+history of actions and obs
+uv run src/cfg_train_expert.py --config.level-paths "worlds/l/hard_lunar_lander.json"  --config.wandb_name "hard_lunar_lander_cfg_a4o1_0730"

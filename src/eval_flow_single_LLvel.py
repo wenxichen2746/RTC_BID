@@ -88,7 +88,7 @@ class GFDMethodConfig:
 class EvalConfig:
     step: int = -1
     weak_step: int | None = None
-    num_evals: int = 2048
+    num_evals: int = 248#2048
     num_flow_steps: int = 5
 
     inference_delay: int = 0
