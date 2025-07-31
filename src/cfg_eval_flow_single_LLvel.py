@@ -140,7 +140,7 @@ def eval(
                 and prefix_attention_horizon <= policy.action_chunk_size
             ), f"{config.inference_delay=} {prefix_attention_horizon=} {policy.action_chunk_size=}"
             print(
-                f"{config.execute_horizon=} {config.inference_delay=} {prefix_attention_horizon=} {policy.action_chunk_size=}"
+                f"RTC{config.execute_horizon=} {config.inference_delay=} {prefix_attention_horizon=} {policy.action_chunk_size=}"
             )
             next_action_chunk = policy.realtime_action(
                 key,
@@ -156,6 +156,7 @@ def eval(
             prefix_attention_horizon = policy.action_chunk_size - config.execute_horizon
             if config.method.bid_k is not None:
                 assert weak_policy is not None, "weak_policy is required for BID"
+            print('BID')
             next_action_chunk = policy.bid_action(
                 key,
                 obs,
@@ -168,6 +169,7 @@ def eval(
                 bid_weak_policy=weak_policy if config.method.bid_k is not None else None,
             )
         elif isinstance(config.method, CFGMethodConfig):
+            print('CFG')
             next_action_chunk = policy.action_cfg(#inference delay NOT IMPLEMENTED YET
                 key,
                 obs, #context (obs,actions)
@@ -288,15 +290,33 @@ def main(
     sharding = jax.sharding.NamedSharding(mesh, pspec)
 
     #calculate index for masking in CFG
-    raw_obs_dim = jax.eval_shape(env.reset_to_level, jax.random.key(0), jax.tree.map(lambda x: x[0], levels), env_params)[0].shape[-1]
+    raw_obs_dim = jax.eval_shape(
+        env.reset_to_level, jax.random.key(0), jax.tree.map(lambda x: x[0], levels), env_params
+    )[0].shape[-1]
     action_dim = env.action_space(env_params).shape[0]
-    context_obs_len = config.obs_history_length * raw_obs_dim
-    context_act_len = config.act_history_length * action_dim
-    context_dim = context_obs_len + context_act_len
-    context_obs_index = (0, context_obs_len)
-    context_act_index = (context_obs_len, context_obs_len + context_act_len)
+    context_act_len = config.act_history_length * action_dim      # 24
+    context_obs_len = raw_obs_dim - context_act_len               # 679 - 24 = 655
+    context_dim     = raw_obs_dim                                 # 679
+    context_obs_index = (0, context_obs_len)                      # (0, 655)
+    context_act_index = (context_obs_len, context_obs_len + context_act_len)  # (655, 679)
+    print("=== Context/Env Dimension Debug ===")
+    print(f"raw_obs_dim:        {raw_obs_dim}")
+    print(f"action_dim:         {action_dim}")
+    print(f"obs_history_length: {config.obs_history_length}")
+    print(f"act_history_length: {config.act_history_length}")
+    print(f"context_obs_len:    {context_obs_len}")
+    print(f"context_act_len:    {context_act_len}")
+    print(f"context_dim:        {context_dim}")
+    print(f"context_obs_index:  {context_obs_index}")
+    print(f"context_act_index:  {context_act_index}")
+    print("===================================")
 
-    env = cfg_train_expert.ActObsHistoryWrapper(env, obs_history_length=config.obs_history_length, act_history_length=config.act_history_length)
+    # Optional: sanity check—should print (679,)
+    sample_obs, *_ = env.reset_to_level(jax.random.key(0), jax.tree.map(lambda x: x[0], levels), env_params)
+    print(f"env.reset_to_level() sample RAW obs shape: {sample_obs.shape}")
+    assert sample_obs.shape[-1] == context_dim
+    # env = cfg_train_expert.ActObsHistoryWrapper(env, obs_history_length=config.obs_history_length, act_history_length=config.act_history_length)
+
 
     @functools.partial(jax.jit, static_argnums=(0,), in_shardings=sharding, out_shardings=sharding)
     @functools.partial(shard_map.shard_map, mesh=mesh, in_specs=(None, pspec, pspec, pspec, pspec), out_specs=pspec)
@@ -312,6 +332,11 @@ def main(
         )
         graphdef, state = nnx.split(policy)
         state.replace_by_pure_dict(state_dict)
+        #Add demension check
+        trained_obs_len = policy.null_obs_embed.value.shape[0]
+        trained_act_len = policy.null_act_embed.value.shape[0]
+        assert trained_obs_len == context_obs_len, (trained_obs_len, context_obs_len)
+        assert trained_act_len == context_act_len, (trained_act_len, context_act_len)
         policy = nnx.merge(graphdef, state)
         if weak_state_dict is not None:
             graphdef, state = nnx.split(policy)
@@ -326,16 +351,17 @@ def main(
     results = collections.defaultdict(list)
 
 
-    for inference_delay in [1]:
+    for inference_delay in [1,3,5]:
     # for inference_delay in [0]:
         for execute_horizon in range(max(1, inference_delay), 8 - inference_delay + 1,2):
+        # for execute_horizon in [max(1, inference_delay)]:
             # execute_horizon=max(1, inference_delay)
-            for vel_target in [0.7, 0.8, 0.9, 1.0, 1.2]:
+            for vel_target in [0.1,0.3,0.5,0.7, 0.8, 0.9, 1.0, 1.1, 1.3, 1.5]:
                 #
 
                 levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4) #change to vel_y=something here if needed
                 
-                print(f"{inference_delay=} {execute_horizon=}")
+                print(f"{inference_delay=} {execute_horizon=} {vel_target=}")
                 c = dataclasses.replace(
                     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=NaiveMethodConfig()
                 )
@@ -442,6 +468,24 @@ def main(
                     results["execute_horizon"].append(execute_horizon)
                     results["env_vel"].append(vel_target)
 
+                c = dataclasses.replace(
+                    config,
+                    inference_delay=inference_delay,
+                    execute_horizon=execute_horizon,
+                    method=CFGMethodConfig(w_1=1.0, w_2=2.0, w_3=0.0),
+                )
+                if weak_state_dicts is None:
+                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
+                else:
+                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+                for i in range(len(level_paths)):
+                    for k, v in out.items():
+                        results[k].append(v[i])
+                    results["delay"].append(inference_delay)
+                    results["method"].append("cfg120")
+                    results["level"].append(level_paths[i])
+                    results["execute_horizon"].append(execute_horizon)
+                    results["env_vel"].append(vel_target)
 
 
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)

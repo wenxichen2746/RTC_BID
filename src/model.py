@@ -450,7 +450,7 @@ class FlowPolicyCFG2(nnx.Module):
         ctx = context
         act_slice = ctx[:, self.act_start:self.act_end]   # [B, A]
         obs_slice = ctx[:, self.obs_start:self.obs_end]   # [B, O]
-
+        
         # Batch-views of learnable nulls
         null_act = jnp.broadcast_to(self.null_act_embed[None, :], act_slice.shape)
         null_obs = jnp.broadcast_to(self.null_obs_embed[None, :], obs_slice.shape)
