@@ -556,3 +556,91 @@ class FlowPolicyCFG2(nnx.Module):
         return jnp.mean(jnp.square(pred - u_t))
 
 
+
+    def bid_action(
+        self,
+        rng: jax.Array,
+        obs: jax.Array,
+        num_steps: int,
+        prev_action_chunk: jax.Array,  # [batch, horizon, action_dim]
+        inference_delay: int,
+        prefix_attention_horizon: int,
+        n_samples: int,
+        # when below two are None, it becomes backwards loss only (i.e., rejection sampling)
+        bid_weak_policy: Self | None = None,
+        bid_k: int | None = None,
+    ) -> jax.Array:
+        obs = einops.repeat(obs, "b ... -> (n b) ...", n=n_samples)
+        weights = get_prefix_weights(inference_delay, prefix_attention_horizon, self.action_chunk_size, "exp")
+
+        def backward_loss(action_chunks: jax.Array):
+            error = jnp.linalg.norm(action_chunks - prev_action_chunk, axis=-1)  # [n, b, h]
+            return jnp.sum(error * weights[None, None, :], axis=-1)  # [n, b]
+
+        strong_actions = einops.rearrange(self.action(rng, obs, num_steps), "(n b) h d -> n b h d", n=n_samples)
+        loss = backward_loss(strong_actions)  # [n, b]
+
+        if bid_weak_policy is not None or bid_k is not None:
+            assert bid_weak_policy is not None and bid_k is not None, (bid_weak_policy, bid_k)
+            weak_actions = einops.rearrange(
+                bid_weak_policy.action(rng, obs, num_steps), "(n b) h d -> n b h d", n=n_samples
+            )
+            weak_loss = backward_loss(weak_actions)  # [n, b]
+            weak_idxs = jax.lax.top_k(-weak_loss.T, bid_k)[1].T  # [k, b]
+            strong_idxs = jax.lax.top_k(-loss.T, bid_k)[1].T  # [k, b]
+            a_plus = jnp.take_along_axis(strong_actions, strong_idxs[:, :, None, None], axis=0)  # [k, b, h, d]
+            a_minus = jnp.take_along_axis(weak_actions, weak_idxs[:, :, None, None], axis=0)  # [k, b, h, d]
+            # compute forward loss for each action in strong_actions
+            forward_loss = jnp.sum(
+                jnp.linalg.norm(strong_actions[:, None] - a_plus[None, :], axis=-1),  # [n, k, b, h]
+                axis=(1, 3),  # [n, b]
+            ) - jnp.sum(
+                jnp.linalg.norm(strong_actions[:, None] - a_minus[None, :], axis=-1),  # [n, k, b, h]
+                axis=(1, 3),  # [n, b]
+            )
+            loss += forward_loss / n_samples
+
+        best_idxs = jnp.argmin(loss, axis=0)  # [b]
+        return jnp.take_along_axis(strong_actions, best_idxs[None, :, None, None], axis=0).squeeze(0)  # [b, h, d]
+
+    def realtime_action(
+        self,
+        rng: jax.Array,
+        obs: jax.Array,
+        num_steps: int,
+        prev_action_chunk: jax.Array,  # [batch, horizon, action_dim]
+        inference_delay: int,
+        prefix_attention_horizon: int,
+        prefix_attention_schedule: PrefixAttentionSchedule,
+        max_guidance_weight: float,
+    ) -> jax.Array:
+        dt = 1 / num_steps
+
+        def step(carry, _):
+            x_t, time = carry
+
+            @functools.partial(jax.vmap, in_axes=(0, 0, 0, None))  # over batch
+            def pinv_corrected_velocity(obs, x_t, y, t):
+                def denoiser(x_t):
+                    v_t = self(obs[None], x_t[None], t)[0]
+                    return x_t + v_t * (1 - t), v_t
+
+                x_1, vjp_fun, v_t = jax.vjp(denoiser, x_t, has_aux=True)
+                weights = get_prefix_weights(
+                    inference_delay, prefix_attention_horizon, self.action_chunk_size, prefix_attention_schedule
+                )
+                error = (y - x_1) * weights[:, None]
+                pinv_correction = vjp_fun(error)[0]
+                # constants from paper
+                inv_r2 = (t**2 + (1 - t) ** 2) / ((1 - t) ** 2)
+                c = jnp.nan_to_num((1 - t) / t, posinf=max_guidance_weight)
+                guidance_weight = jnp.minimum(c * inv_r2, max_guidance_weight)
+                return v_t + guidance_weight * pinv_correction
+
+            v_t = pinv_corrected_velocity(obs, x_t, prev_action_chunk, time)
+            return (x_t + dt * v_t, time + dt), None
+
+        noise = jax.random.normal(rng, shape=(obs.shape[0], self.action_chunk_size, self.action_dim))
+        (x_1, _), _ = jax.lax.scan(step, (noise, 0.0), length=num_steps)
+        assert x_1.shape == (obs.shape[0], self.action_chunk_size, self.action_dim), x_1.shape
+        return x_1
