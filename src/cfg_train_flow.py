@@ -144,10 +144,6 @@ def main(config: Config):
         total_params = sum(x.size for x in jax.tree.leaves(nnx.state(policy, nnx.Param)))
         print(f"Total params: {total_params:,}")
 
-        def wd_mask(path, _):
-            name = "/".join(path)
-            return not ("null_act_embed" in name or "null_obs_embed" in name)
-
         optimizer = nnx.Optimizer(
             policy,
             optax.chain(
@@ -155,7 +151,6 @@ def main(config: Config):
                 optax.adamw(
                     optax.warmup_constant_schedule(0, config.learning_rate, config.lr_warmup_steps),
                     weight_decay=config.weight_decay,
-                    mask=wd_mask,
                 ),
             ),
         )
