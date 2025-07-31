@@ -62,6 +62,8 @@ class Config:
     p_drop_obs: float = 0.2
     p_drop_act: float = 0.2
 
+    wandb_name: str = "my-default-trainflow-name"
+
 @struct.dataclass
 class EpochCarry:
     rng: jax.Array
@@ -216,7 +218,7 @@ def main(config: Config):
         video = None
         return EpochCarry(rng, train_state, epoch_carry.graphdef), ({**train_info, **eval_info}, video)
 
-    wandb.init(project=WANDB_PROJECT)
+    wandb.init(project=WANDB_PROJECT, name=config.wandb_name)
     rng = jax.random.key(config.seed)
     epoch_carry = init(jax.random.split(rng, len(config.level_paths)))
     for epoch_idx in tqdm.tqdm(range(config.num_epochs)):
