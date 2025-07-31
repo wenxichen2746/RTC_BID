@@ -326,7 +326,7 @@ def main(
     results = collections.defaultdict(list)
 
 
-    for inference_delay in [1, 2]:
+    for inference_delay in [1]:
     # for inference_delay in [0]:
         for execute_horizon in range(max(1, inference_delay), 8 - inference_delay + 1,2):
             # execute_horizon=max(1, inference_delay)
