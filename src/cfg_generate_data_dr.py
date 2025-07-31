@@ -138,7 +138,7 @@ def main(config: Config):
                 if k in ["returned_episode_returns", "returned_episode_lengths", "returned_episode_solved"]
             }
             return StepCarry(rng, next_obs, next_env_state, next_policy_idxs), Data(
-                cfg_train_expert.ObsHistoryWrapper.get_original_obs(carry.env_state),
+                cfg_train_expert.ActObsHistoryWrapper.get_original_obs(carry.env_state),
                 action,
                 done,
                 info["returned_episode_solved"],
