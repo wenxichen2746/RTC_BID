@@ -23,7 +23,7 @@ import eval_flow as _eval
 import generate_data
 import model as _model
 import train_expert
-
+import cfg_train_expert
 WANDB_PROJECT = "rtc-kinetix-bc"
 LOG_DIR = pathlib.Path("logs-bc")
 
@@ -78,7 +78,7 @@ def main(config: Config):
     static_env_params = static_env_params.replace(screen_dim=train_expert.SCREEN_DIM)
 
     env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
-
+    env=cfg_train_expert.ActObsHistoryWrapper(env, act_history_length=4, obs_history_length=1)
     mesh = jax.make_mesh((jax.local_device_count(),), ("level",))
     sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("level"))
 
