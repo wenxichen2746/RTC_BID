@@ -114,8 +114,11 @@ def eval(
     weak_policy: _model.FlowPolicy | _model.FlowPolicyCFG2 | None = None,
 ):
     env = train_expert.BatchEnvWrapper(
-        wrappers.LogWrapper(wrappers.AutoReplayWrapper(train_expert.NoisyActionWrapper(env))), config.num_evals
+        wrappers.LogWrapper(wrappers.AutoReplayWrapper(train_expert.NoisyActionWrapper(
+            cfg_train_expert.ActObsHistoryWrapper(env, act_history_length=4, obs_history_length=1)
+            ))), config.num_evals
     )
+    # env=cfg_train_expert.ActObsHistoryWrapper(env, act_history_length=4, obs_history_length=1)
     render_video = train_expert.make_render_video(renderer_pixels.make_render_pixels(env_params, static_env_params))
     assert config.execute_horizon >= config.inference_delay, f"{config.execute_horizon=} {config.inference_delay=}"
 
@@ -260,7 +263,7 @@ def main(
     static_env_params = static_env_params.replace(screen_dim=train_expert.SCREEN_DIM)
 
     env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
-
+    _env=cfg_train_expert.ActObsHistoryWrapper(env, act_history_length=4, obs_history_length=1)
     # load policies from best checkpoints by solve rate
     state_dicts = []
     weak_state_dicts = []
@@ -280,10 +283,7 @@ def main(
     else:
         weak_state_dicts = None
 
-    obs_dim = jax.eval_shape(env.reset_to_level, jax.random.key(0), jax.tree.map(lambda x: x[0], levels), env_params)[
-        0
-    ].shape[-1]
-    action_dim = env.action_space(env_params).shape[0]
+    action_dim = _env.action_space(env_params).shape[0]
 
     mesh = jax.make_mesh((jax.local_device_count(),), ("x",))
     pspec = jax.sharding.PartitionSpec("x")
@@ -291,9 +291,9 @@ def main(
 
     #calculate index for masking in CFG
     raw_obs_dim = jax.eval_shape(
-        env.reset_to_level, jax.random.key(0), jax.tree.map(lambda x: x[0], levels), env_params
+        _env.reset_to_level, jax.random.key(0), jax.tree.map(lambda x: x[0], levels), env_params
     )[0].shape[-1]
-    action_dim = env.action_space(env_params).shape[0]
+    action_dim = _env.action_space(env_params).shape[0]
     context_act_len = config.act_history_length * action_dim      # 24
     context_obs_len = raw_obs_dim - context_act_len               # 679 - 24 = 655
     context_dim     = raw_obs_dim                                 # 679
@@ -312,7 +312,7 @@ def main(
     print("===================================")
 
     # Optional: sanity check—should print (679,)
-    sample_obs, *_ = env.reset_to_level(jax.random.key(0), jax.tree.map(lambda x: x[0], levels), env_params)
+    sample_obs, *_ = _env.reset_to_level(jax.random.key(0), jax.tree.map(lambda x: x[0], levels), env_params)
     print(f"env.reset_to_level() sample RAW obs shape: {sample_obs.shape}")
     assert sample_obs.shape[-1] == context_dim
     # env = cfg_train_expert.ActObsHistoryWrapper(env, obs_history_length=config.obs_history_length, act_history_length=config.act_history_length)
@@ -351,10 +351,10 @@ def main(
     results = collections.defaultdict(list)
 
 
-    for inference_delay in [1,3,5]:
+    for inference_delay in [1,2]:
     # for inference_delay in [0]:
-        for execute_horizon in range(max(1, inference_delay), 8 - inference_delay + 1,2):
-        # for execute_horizon in [max(1, inference_delay)]:
+        # for execute_horizon in range(max(1, inference_delay), 8 - inference_delay + 1,2):
+        for execute_horizon in [max(1, inference_delay)]:
             # execute_horizon=max(1, inference_delay)
             for vel_target in [0.1,0.3,0.5,0.7, 0.8, 0.9, 1.0, 1.1, 1.3, 1.5]:
                 #
@@ -483,6 +483,25 @@ def main(
                         results[k].append(v[i])
                     results["delay"].append(inference_delay)
                     results["method"].append("cfg120")
+                    results["level"].append(level_paths[i])
+                    results["execute_horizon"].append(execute_horizon)
+                    results["env_vel"].append(vel_target)
+
+                c = dataclasses.replace(
+                    config,
+                    inference_delay=inference_delay,
+                    execute_horizon=execute_horizon,
+                    method=CFGMethodConfig(w_1=0.0, w_2=2.0, w_3=1.0),
+                )
+                if weak_state_dicts is None:
+                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
+                else:
+                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+                for i in range(len(level_paths)):
+                    for k, v in out.items():
+                        results[k].append(v[i])
+                    results["delay"].append(inference_delay)
+                    results["method"].append("cfg021")
                     results["level"].append(level_paths[i])
                     results["execute_horizon"].append(execute_horizon)
                     results["env_vel"].append(vel_target)
