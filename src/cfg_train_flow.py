@@ -79,6 +79,23 @@ def main(config: Config):
 
     env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
     env=cfg_train_expert.ActObsHistoryWrapper(env, act_history_length=4, obs_history_length=1)
+
+    #DR
+    if 'hard_lunar_lander' in config.level_paths[0]:
+        print(f'training LL, randomizing target location')
+        env = cfg_train_expert.RandomizedResetWrapper(env, polygon_index=4)
+    elif 'grasp' in config.level_paths[0]:
+        print(f'training grasp, randomizing target location')
+        env = cfg_train_expert.RandomizedResetWrapper(env, polygon_index=10)
+    elif 'reach_avoid' in config.level_paths[0]:
+        print(f'training reach&avoid, randomizing obstacles location')
+        env = cfg_train_expert.RandomizedResetWrapper(env, polygon_index=8)
+        env = cfg_train_expert.RandomizedResetWrapper(env, polygon_index=7)
+
+    else:
+        raise NotImplementedError("*** Level not recognized DR not implemented **")
+
+
     mesh = jax.make_mesh((jax.local_device_count(),), ("level",))
     sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("level"))
 

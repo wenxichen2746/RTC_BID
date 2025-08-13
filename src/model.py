@@ -6,7 +6,7 @@ import einops
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
-
+from typing import Optional,Sequence
 
 @dataclasses.dataclass(frozen=True)
 class ModelConfig:
@@ -164,6 +164,7 @@ class FlowPolicy(nnx.Module):
         (x_1, _), _ = jax.lax.scan(step, (noise, 0.0), length=num_steps)
         assert x_1.shape == (obs.shape[0], self.action_chunk_size, self.action_dim), x_1.shape
         return x_1
+    
     def loss(self, rng: jax.Array, obs: jax.Array, action: jax.Array):
         assert action.dtype == jnp.float32
         assert action.shape == (obs.shape[0], self.action_chunk_size, self.action_dim), action.shape
@@ -285,105 +286,6 @@ class FlowPolicy(nnx.Module):
 # flow policy with null guidance for classifier free guidance:
 
 
-from typing import Optional,Sequence
-
-class FlowPolicyCFG(nnx.Module):
-    def __init__(
-        self,
-        *,
-        obs_dim: int,
-        action_dim: int,
-        config: ModelConfig,
-        rngs: nnx.Rngs,
-    ):
-        self.channel_dim = config.channel_dim
-        self.action_dim = action_dim
-        self.action_chunk_size = config.action_chunk_size
-
-        self.in_proj = nnx.Linear(action_dim + obs_dim, config.channel_dim, rngs=rngs)
-        self.mlp_stack = [
-            MLPMixerBlock(
-                config.action_chunk_size,
-                config.token_hidden_dim,
-                config.channel_dim,
-                config.channel_hidden_dim,
-                rngs=rngs,
-            )
-            for _ in range(config.num_layers)
-        ]
-        self.time_mlp = nnx.Sequential(
-            nnx.Linear(config.channel_dim, config.channel_dim, rngs=rngs),
-            nnx.swish,
-            nnx.Linear(config.channel_dim, config.channel_dim, rngs=rngs),
-            nnx.swish,
-        )
-        self.final_norm = nnx.LayerNorm(config.channel_dim, use_scale=False, use_bias=False, rngs=rngs)
-        self.final_adaln = nnx.Linear(
-            config.channel_dim, 2 * config.channel_dim, kernel_init=nnx.initializers.zeros_init(), rngs=rngs
-        )
-        self.out_proj = nnx.Linear(config.channel_dim, action_dim, rngs=rngs)
-
-        self.null_embed = nnx.Param(jnp.zeros((obs_dim,), dtype=jnp.float32))
-
-    def __call__(self, obs: jax.Array, x_t: jax.Array, time: jax.Array, use_null: Optional[jax.Array] = None) -> jax.Array:
-        assert x_t.shape == (obs.shape[0], self.action_chunk_size, self.action_dim), x_t.shape
-        if use_null is None:
-            use_null = jnp.zeros((obs.shape[0],), dtype=bool)
-        null_obs = jnp.broadcast_to(self.null_embed[None, :], obs.shape)
-        eff_obs = jnp.where(use_null[:, None], null_obs, obs)
-        time_emb = posemb_sincos(jnp.broadcast_to(time, obs.shape[0]), self.channel_dim, min_period=4e-3, max_period=4.0)
-        time_emb = self.time_mlp(time_emb)
-        eff_obs = einops.repeat(eff_obs, "b e -> b c e", c=self.action_chunk_size)
-        x = jnp.concatenate([x_t, eff_obs], axis=-1)
-        x = self.in_proj(x)
-        for mlp in self.mlp_stack:
-            x = mlp(x, time_emb)
-        assert x.shape == (eff_obs.shape[0], self.action_chunk_size, self.channel_dim), x.shape
-        scale, shift = jnp.split(self.final_adaln(time_emb)[:, None], 2, axis=-1)
-        x = self.final_norm(x) * (1 + scale) + shift
-        x = self.out_proj(x)
-        return x
-
-    def action(self, rng: jax.Array, obs: jax.Array, num_steps: int) -> jax.Array:
-        dt = 1 / num_steps
-        def step(carry, _):
-            x_t, time = carry
-            v_t = self(obs, x_t, time, use_null=jnp.zeros((obs.shape[0],), dtype=bool))
-            return (x_t + dt * v_t, time + dt), None
-        noise = jax.random.normal(rng, shape=(obs.shape[0], self.action_chunk_size, self.action_dim))
-        (x_1, _), _ = jax.lax.scan(step, (noise, 0.0), length=num_steps)
-        assert x_1.shape == (obs.shape[0], self.action_chunk_size, self.action_dim), x_1.shape
-        return x_1
-
-    def action_cfg(self, rng: jax.Array, obs: jax.Array, num_steps: int, s: float) -> jax.Array:
-        dt = 1 / num_steps
-        b = obs.shape[0]
-        mask_c = jnp.zeros((b,), dtype=bool)
-        mask_u = jnp.ones((b,), dtype=bool)
-        def step(carry, _):
-            x_t, time = carry
-            u_c = self(obs, x_t, time, use_null=mask_c)
-            u_u = self(obs, x_t, time, use_null=mask_u)
-            u = (1.0 + s) * u_c - s * u_u
-            return (x_t + dt * u, time + dt), None
-        noise = jax.random.normal(rng, shape=(b, self.action_chunk_size, self.action_dim))
-        (x_1, _), _ = jax.lax.scan(step, (noise, 0.0), length=num_steps)
-        return x_1
-
-    def loss(self, rng: jax.Array, obs: jax.Array, action: jax.Array, p_drop: float = 0.2):
-        assert action.dtype == jnp.float32
-        assert action.shape == (obs.shape[0], self.action_chunk_size, self.action_dim), action.shape
-        noise_rng, time_rng, drop_rng = jax.random.split(rng, 3)
-        time = jax.random.uniform(time_rng, (obs.shape[0],))
-        noise = jax.random.normal(noise_rng, shape=action.shape)
-        x_t = (1 - time[:, None, None]) * noise + time[:, None, None] * action
-        u_t = action - noise
-        use_null = jax.random.bernoulli(drop_rng, p=p_drop, shape=(obs.shape[0],))
-        pred = self(obs, x_t, time, use_null=use_null)
-        return jnp.mean(jnp.square(pred - u_t))
-
-
-
 
 
 class FlowPolicyCFG2(nnx.Module):
@@ -498,20 +400,35 @@ class FlowPolicyCFG2(nnx.Module):
         return x
 
     # Fully-conditional rollout (no nulling)
-    def action(self, rng: jax.Array, context: jax.Array, num_steps: int) -> jax.Array:
+    # def action(self, rng: jax.Array, context: jax.Array, num_steps: int) -> jax.Array:
+    #     dt = 1.0 / num_steps
+    #     B = context.shape[0]
+    #     def step(carry, _):
+    #         x_t, time = carry
+    #         v_t = self(context, x_t, time)  # both masks default to False
+    #         return (x_t + dt * v_t, time + dt), None
+    #     noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
+    #     (x_1, _), _ = jax.lax.scan(step, (noise, 0.0), length=num_steps)
+    #     return x_1
+    
+    def action(self, rng: jax.Array, context: jax.Array, num_steps: int, mask_action: bool = False) -> jax.Array:
         dt = 1.0 / num_steps
         B = context.shape[0]
+        mask_act = jnp.ones((B,), dtype=bool) if mask_action else jnp.zeros((B,), dtype=bool)
+        mask_obs = jnp.zeros((B,), dtype=bool)
+
         def step(carry, _):
             x_t, time = carry
-            v_t = self(context, x_t, time)  # both masks default to False
+            v_t = self(context, x_t, time, use_null_act=mask_act, use_null_obs=mask_obs)
             return (x_t + dt * v_t, time + dt), None
+
         noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
         (x_1, _), _ = jax.lax.scan(step, (noise, 0.0), length=num_steps)
         return x_1
 
     # Generalized CFG with two independent nulls
     # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs)
-    def action_cfg(self, rng: jax.Array, context: jax.Array, num_steps: int, w1: float, w2: float, w3: float) -> jax.Array:
+    def action_cfg(self, rng: jax.Array, context: jax.Array, num_steps: int, w1: float, w2: float, w3: float, w4: float=0.0) -> jax.Array:
         dt = 1.0 / num_steps
         B = context.shape[0]
         mask_F = jnp.zeros((B,), dtype=bool)
@@ -519,10 +436,15 @@ class FlowPolicyCFG2(nnx.Module):
 
         def step(carry, _):
             x_t, time = carry
-            u_nn = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_T)  # (∅,∅)
-            u_an = self(context, x_t, time, use_null_act=mask_F, use_null_obs=mask_T)  # (actions,∅)
-            u_no = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_F)  # (∅,obs)
-            u = (1.0 - 2.0 * w1) * u_nn + w2 * u_an + w3 * u_no
+
+            # compute each term only if its weight is non-zero; otherwise use a zero placeholder
+            coeff_nn = 1.0 - 2.0 * w1
+            u_nn = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_T) if coeff_nn != 0.0 else jnp.zeros_like(x_t)
+            u_an = self(context, x_t, time, use_null_act=mask_F, use_null_obs=mask_T) if w2 != 0.0 else jnp.zeros_like(x_t)
+            u_no = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_F) if w3 != 0.0 else jnp.zeros_like(x_t)
+            u_ao = self(context, x_t, time, use_null_act=mask_F, use_null_obs=mask_F) if w4 != 0.0 else jnp.zeros_like(x_t)  # (actions, obs)
+
+            u = coeff_nn * u_nn + w2 * u_an + w3 * u_no + w4 * u_ao
             return (x_t + dt * u, time + dt), None
 
         noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
@@ -535,8 +457,8 @@ class FlowPolicyCFG2(nnx.Module):
         rng: jax.Array,
         context: jax.Array,                         # [B, context_dim]
         action: jax.Array,                          # [B, C, A]
-        p_drop_act: float = 0.2,
-        p_drop_obs: float = 0.2,
+        p_drop_act: float = 0.3, #0.2
+        p_drop_obs: float = 0.0, #0.2
     ):
         assert action.dtype == jnp.float32
         B = context.shape[0]
@@ -555,8 +477,7 @@ class FlowPolicyCFG2(nnx.Module):
         pred = self(context, x_t, time, use_null_act=use_null_act, use_null_obs=use_null_obs)
         return jnp.mean(jnp.square(pred - u_t))
 
-
-
+    
     def bid_action(
         self,
         rng: jax.Array,
@@ -566,9 +487,9 @@ class FlowPolicyCFG2(nnx.Module):
         inference_delay: int,
         prefix_attention_horizon: int,
         n_samples: int,
-        # when below two are None, it becomes backwards loss only (i.e., rejection sampling)
         bid_weak_policy: Self | None = None,
         bid_k: int | None = None,
+        mask_action: bool = False,
     ) -> jax.Array:
         obs = einops.repeat(obs, "b ... -> (n b) ...", n=n_samples)
         weights = get_prefix_weights(inference_delay, prefix_attention_horizon, self.action_chunk_size, "exp")
@@ -577,26 +498,25 @@ class FlowPolicyCFG2(nnx.Module):
             error = jnp.linalg.norm(action_chunks - prev_action_chunk, axis=-1)  # [n, b, h]
             return jnp.sum(error * weights[None, None, :], axis=-1)  # [n, b]
 
-        strong_actions = einops.rearrange(self.action(rng, obs, num_steps), "(n b) h d -> n b h d", n=n_samples)
+        strong_actions = einops.rearrange(
+            self.action(rng, obs, num_steps, mask_action=mask_action), "(n b) h d -> n b h d", n=n_samples
+        )
         loss = backward_loss(strong_actions)  # [n, b]
 
         if bid_weak_policy is not None or bid_k is not None:
             assert bid_weak_policy is not None and bid_k is not None, (bid_weak_policy, bid_k)
             weak_actions = einops.rearrange(
-                bid_weak_policy.action(rng, obs, num_steps), "(n b) h d -> n b h d", n=n_samples
+                bid_weak_policy.action(rng, obs, num_steps, mask_action=mask_action), "(n b) h d -> n b h d", n=n_samples
             )
             weak_loss = backward_loss(weak_actions)  # [n, b]
             weak_idxs = jax.lax.top_k(-weak_loss.T, bid_k)[1].T  # [k, b]
-            strong_idxs = jax.lax.top_k(-loss.T, bid_k)[1].T  # [k, b]
+            strong_idxs = jax.lax.top_k(-loss.T, bid_k)[1].T     # [k, b]
             a_plus = jnp.take_along_axis(strong_actions, strong_idxs[:, :, None, None], axis=0)  # [k, b, h, d]
-            a_minus = jnp.take_along_axis(weak_actions, weak_idxs[:, :, None, None], axis=0)  # [k, b, h, d]
-            # compute forward loss for each action in strong_actions
+            a_minus = jnp.take_along_axis(weak_actions,   weak_idxs[:,   :, None, None], axis=0)  # [k, b, h, d]
             forward_loss = jnp.sum(
-                jnp.linalg.norm(strong_actions[:, None] - a_plus[None, :], axis=-1),  # [n, k, b, h]
-                axis=(1, 3),  # [n, b]
+                jnp.linalg.norm(strong_actions[:, None] - a_plus[None, :], axis=-1), axis=(1, 3)
             ) - jnp.sum(
-                jnp.linalg.norm(strong_actions[:, None] - a_minus[None, :], axis=-1),  # [n, k, b, h]
-                axis=(1, 3),  # [n, b]
+                jnp.linalg.norm(strong_actions[:, None] - a_minus[None, :], axis=-1), axis=(1, 3)
             )
             loss += forward_loss / n_samples
 
@@ -613,27 +533,32 @@ class FlowPolicyCFG2(nnx.Module):
         prefix_attention_horizon: int,
         prefix_attention_schedule: PrefixAttentionSchedule,
         max_guidance_weight: float,
+        mask_action: bool = False,
     ) -> jax.Array:
         dt = 1 / num_steps
+        # B = obs.shape[0]
+        # mask_act_B = jnp.ones((B,), dtype=bool) if mask_action else jnp.zeros((B,), dtype=bool)
+        # mask_obs_B = jnp.zeros((B,), dtype=bool)
 
         def step(carry, _):
             x_t, time = carry
 
             @functools.partial(jax.vmap, in_axes=(0, 0, 0, None))  # over batch
-            def pinv_corrected_velocity(obs, x_t, y, t):
-                def denoiser(x_t):
-                    v_t = self(obs[None], x_t[None], t)[0]
-                    return x_t + v_t * (1 - t), v_t
+            def pinv_corrected_velocity(o, x_t_i, y_i, t_i):
+                def denoiser(x_t_single):
+                    m_act_1 = jnp.ones((1,), dtype=bool) if mask_action else jnp.zeros((1,), dtype=bool)
+                    m_obs_1 = jnp.zeros((1,), dtype=bool)
+                    v_t = self(o[None], x_t_single[None], t_i, use_null_act=m_act_1, use_null_obs=m_obs_1)[0]
+                    return x_t_single + v_t * (1 - t_i), v_t
 
-                x_1, vjp_fun, v_t = jax.vjp(denoiser, x_t, has_aux=True)
+                x_1, vjp_fun, v_t = jax.vjp(denoiser, x_t_i, has_aux=True)
                 weights = get_prefix_weights(
                     inference_delay, prefix_attention_horizon, self.action_chunk_size, prefix_attention_schedule
                 )
-                error = (y - x_1) * weights[:, None]
+                error = (y_i - x_1) * weights[:, None]
                 pinv_correction = vjp_fun(error)[0]
-                # constants from paper
-                inv_r2 = (t**2 + (1 - t) ** 2) / ((1 - t) ** 2)
-                c = jnp.nan_to_num((1 - t) / t, posinf=max_guidance_weight)
+                inv_r2 = (t_i**2 + (1 - t_i) ** 2) / ((1 - t_i) ** 2)
+                c = jnp.nan_to_num((1 - t_i) / t_i, posinf=max_guidance_weight)
                 guidance_weight = jnp.minimum(c * inv_r2, max_guidance_weight)
                 return v_t + guidance_weight * pinv_correction
 

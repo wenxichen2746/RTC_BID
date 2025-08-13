@@ -26,7 +26,7 @@ import numpy as np
 
 from train_expert_dr import change_polygon_position
 from train_expert_dr import change_polygon_position_and_velocity
-
+from cfg_train_expert import RandomizedResetWrapper,ActObsHistoryWrapper
 
 class DynamicPolygonDriftWrapper(wrappers.UnderspecifiedEnvWrapper):
     """
@@ -83,46 +83,63 @@ class Config:
     episode: int = 0
     model: _model.ModelConfig = _model.ModelConfig()
     save_dir: str = "env_video"
+    
 
 
-def rollout_and_save_video(level_path, run_path, config=Config()):
+def rollout_and_save_video(level_path, run_path, config=Config(),load=False):
     # Env setup
     static_params = kenv_state.StaticEnvParams(**train_expert.LARGE_ENV_PARAMS, frame_skip=train_expert.FRAME_SKIP)
     env_params = kenv_state.EnvParams()
     batched_level = train_expert.load_levels([level_path], static_params, env_params)
     # batched_level = change_polygon_position(batched_level, pos_x=2, pos_y=None, index=4)
 
-    batched_level = change_polygon_position_and_velocity(batched_level, pos_x=1,vel_x=2, index=4)
+    # batched_level = change_polygon_position_and_velocity(batched_level, pos_x=1,vel_x=2, index=10)
     single_level = jax.tree.map(lambda x: x[0], batched_level)  # Unbatch safely
 
 
     static_params = static_params.replace(screen_dim=train_expert.SCREEN_DIM)
     base_env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_params)
     # base_env = DynamicPolygonDriftWrapper(base_env, polygon_index=4, axis="x", drift_per_step=2, min_pos=1, max_pos=5)
-
+    base_env = RandomizedResetWrapper(base_env, polygon_index=9)
+    base_env = RandomizedResetWrapper(base_env, polygon_index=8)
+    base_env = RandomizedResetWrapper(base_env, polygon_index=10)
+    base_env=ActObsHistoryWrapper(base_env, act_history_length=4, obs_history_length=1)
     env = train_expert.BatchEnvWrapper(
         wrappers.LogWrapper(
             wrappers.AutoReplayWrapper(train_expert.NoisyActionWrapper(base_env))
         ),
         num=1,
     )
-
+    
     # Policy setup
     level_name = level_path.replace("/", "_").replace(".json", "")
-    log_dirs = sorted(
-        [p for p in pathlib.Path(run_path).iterdir() if p.is_dir() and p.name.isdigit()],
-        key=lambda p: int(p.name),
-    )
-    with (log_dirs[config.episode] / "policies" / f"{level_name}.pkl").open("rb") as f:
-        state_dict = pickle.load(f)
+
 
     obs_dim = jax.eval_shape(env.reset_to_level, jax.random.key(0), single_level, env_params)[0].shape[-1]
     action_dim = env.action_space(env_params).shape[0]
 
     rng = jax.random.key(0)
-    policy = _model.FlowPolicy(obs_dim=obs_dim, action_dim=action_dim, config=config.model, rngs=nnx.Rngs(rng))
+    # policy = _model.FlowPolicy(obs_dim=obs_dim, action_dim=action_dim, config=config.model, rngs=nnx.Rngs(rng))
+
+    policy = _model.FlowPolicyCFG2(
+            context_dim=obs_dim,
+            action_dim=action_dim,
+            config=config.model,
+            rngs=nnx.Rngs(rng),
+            context_act_index= (679, 703) ,
+            context_obs_index= (0, 679),
+        )
     graphdef, state = nnx.split(policy)
-    state.replace_by_pure_dict(state_dict)
+    if load:
+    # if True:
+        print(load,'loading')
+        log_dirs = sorted(
+            [p for p in pathlib.Path(run_path).iterdir() if p.is_dir() and p.name.isdigit()],
+            key=lambda p: int(p.name),
+        )
+        with (log_dirs[config.episode] / "policies" / f"{level_name}.pkl").open("rb") as f:
+            state_dict = pickle.load(f)
+        state.replace_by_pure_dict(state_dict)
     policy = nnx.merge(graphdef, state)
 
     def make_render_video(render_pixels):
@@ -137,34 +154,38 @@ def rollout_and_save_video(level_path, run_path, config=Config()):
 
     # Init rollout
     rng, key = jax.random.split(rng)
-    obs, env_state = env.reset_to_level(key, single_level, env_params)
+    
 
     # Setup video frame collection
     frames = []
-    t=0
-    while True:
-        rng, key = jax.random.split(rng)
-        action = policy.action(key, obs, num_steps=5)[0][0, :]
-        action = jnp.expand_dims(action, axis=0)
+    for eps in range(5):
+        print(f'episode:{eps}')
+        t=0
+        obs, env_state = env.reset_to_level(key, single_level, env_params)
+        while True:
+            rng, key = jax.random.split(rng)
+            action = policy.action(key, obs, num_steps=5)[0][0, :]
+            action = jnp.expand_dims(action, axis=0)
 
-        def unwrap_env_state(state):
-            while hasattr(state, "env_state"):
-                state = state.env_state
-            return jax.tree.map(lambda x: x[0] if hasattr(x, "__getitem__") and not isinstance(x, dict) else x, state)
+            def unwrap_env_state(state):
+                while hasattr(state, "env_state"):
+                    state = state.env_state
+                return jax.tree.map(lambda x: x[0] if hasattr(x, "__getitem__") and not isinstance(x, dict) else x, state)
 
-        pixels = render_fn(unwrap_env_state(env_state))
+            pixels = render_fn(unwrap_env_state(env_state))
 
-        frame = np.array(pixels, dtype=np.uint8)
-        frame = np.transpose(frame, (1, 0, 2))  # W x H x C -> H x W x C
-        frame = np.rot90(frame, k=-1, axes=(0, 1))  # Rotate 90° clockwise
-        frames.append(frame)
+            frame = np.array(pixels, dtype=np.uint8)
+            frame = np.transpose(frame, (1, 0, 2))  # W x H x C -> H x W x C
+            frame = np.rot90(frame, k=-1, axes=(0, 1))  # Rotate 90° clockwise
+            frames.append(frame)
 
-        obs, env_state, reward, done, info = env.step(key, env_state, action, env_params)
-        t+=1
-        print(f"step{t}")
+            obs, env_state, reward, done, info = env.step(key, env_state, action, env_params)
+            t+=1
+            print(f"step{t}")
 
-        if done[0] or t>100:
-            break
+            if done[0] or t>50:
+                break
+        
 
     # Save video
     output_dir = pathlib.Path(config.save_dir)
@@ -179,9 +200,11 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--level_path", required=True)
-    parser.add_argument("--run_path", required=True)
+    parser.add_argument("--run_path", default=None)
     parser.add_argument("--episode", type=int, default=0)
     parser.add_argument("--save_dir", type=str, default="env_video")
+    parser.add_argument("--load", action="store_true", help="Load the model if this flag is passed.")
+
     args = parser.parse_args()
 
-    rollout_and_save_video(args.level_path, args.run_path, Config(episode=args.episode, save_dir=args.save_dir))
+    rollout_and_save_video(args.level_path, args.run_path, Config(episode=args.episode, save_dir=args.save_dir),load=args.load)

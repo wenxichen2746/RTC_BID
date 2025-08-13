@@ -63,20 +63,21 @@ def change_polygon_position_and_velocity(levels, pos_x=None, pos_y=None, vel_x=N
 
 @dataclasses.dataclass(frozen=True)
 class NaiveMethodConfig:
-    pass
+    mask_action: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
 class RealtimeMethodConfig:
     prefix_attention_schedule: _model.PrefixAttentionSchedule = "exp"
     max_guidance_weight: float = 5.0
+    mask_action: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
 class BIDMethodConfig:
     n_samples: int = 16
     bid_k: int | None = None
-
+    mask_action: bool = False
 
 @dataclasses.dataclass(frozen=True)
 class CFGMethodConfig:
@@ -84,6 +85,7 @@ class CFGMethodConfig:
     w_1: float = 1.0
     w_2: float = 2.0
     w_3: float = 2.0
+    w_4: float = 0.0
 
 
 
@@ -91,7 +93,7 @@ class CFGMethodConfig:
 class EvalConfig:
     step: int = -1
     weak_step: int | None = None
-    num_evals: int = 248#2048
+    num_evals: int = 512#2048
     num_flow_steps: int = 5
 
     inference_delay: int = 0
@@ -135,7 +137,7 @@ def eval(
         rng, obs, env_state, action_chunk, n = carry
         rng, key = jax.random.split(rng)
         if isinstance(config.method, NaiveMethodConfig):
-            next_action_chunk = policy.action(key, obs, config.num_flow_steps)
+            next_action_chunk = policy.action(key, obs, config.num_flow_steps,mask_action=config.method.mask_action)
         elif isinstance(config.method, RealtimeMethodConfig):
             prefix_attention_horizon = policy.action_chunk_size - config.execute_horizon
             assert (
@@ -154,6 +156,7 @@ def eval(
                 prefix_attention_horizon,
                 config.method.prefix_attention_schedule,
                 config.method.max_guidance_weight,
+                mask_action=config.method.mask_action
             )
         elif isinstance(config.method, BIDMethodConfig):
             prefix_attention_horizon = policy.action_chunk_size - config.execute_horizon
@@ -170,6 +173,7 @@ def eval(
                 config.method.n_samples,
                 bid_k=config.method.bid_k,
                 bid_weak_policy=weak_policy if config.method.bid_k is not None else None,
+                mask_action=config.method.mask_action
             )
         elif isinstance(config.method, CFGMethodConfig):
             print('CFG')
@@ -295,10 +299,10 @@ def main(
     )[0].shape[-1]
     action_dim = _env.action_space(env_params).shape[0]
     context_act_len = config.act_history_length * action_dim      # 24
-    context_obs_len = raw_obs_dim - context_act_len               # 679 - 24 = 655
-    context_dim     = raw_obs_dim                                 # 679
-    context_obs_index = (0, context_obs_len)                      # (0, 655)
-    context_act_index = (context_obs_len, context_obs_len + context_act_len)  # (655, 679)
+    context_obs_len = raw_obs_dim - context_act_len               # 679
+    context_dim     = raw_obs_dim                                 # 703
+    context_obs_index = (0, context_obs_len)                      # (0, 679)
+    context_act_index = (context_obs_len, context_obs_len + context_act_len)  # (679, 703)
     print("=== Context/Env Dimension Debug ===")
     print(f"raw_obs_dim:        {raw_obs_dim}")
     print(f"action_dim:         {action_dim}")
@@ -316,12 +320,10 @@ def main(
     print(f"env.reset_to_level() sample RAW obs shape: {sample_obs.shape}")
     assert sample_obs.shape[-1] == context_dim
     # env = cfg_train_expert.ActObsHistoryWrapper(env, obs_history_length=config.obs_history_length, act_history_length=config.act_history_length)
-
-
     @functools.partial(jax.jit, static_argnums=(0,), in_shardings=sharding, out_shardings=sharding)
     @functools.partial(shard_map.shard_map, mesh=mesh, in_specs=(None, pspec, pspec, pspec, pspec), out_specs=pspec)
     @functools.partial(jax.vmap, in_axes=(None, 0, 0, 0, 0))
-    def _eval(config: EvalConfig, rng: jax.Array, level: kenv_state.EnvState, state_dict, weak_state_dict):
+    def _eval(config: EvalConfig, rng: jax.Array, level: kenv_state.EnvState, state_dict, weak_state_dict=None):
         policy = _model.FlowPolicyCFG2(
             context_dim=context_dim,
             action_dim=action_dim,
@@ -351,29 +353,51 @@ def main(
     results = collections.defaultdict(list)
 
 
-    for inference_delay in [1,2]:
+    for inference_delay in [1]:
     # for inference_delay in [0]:
         # for execute_horizon in range(max(1, inference_delay), 8 - inference_delay + 1,2):
-        for execute_horizon in [max(1, inference_delay)]:
+        # for execute_horizon in [max(1, inference_delay),8 - inference_delay + 1]:
+        for execute_horizon in [1,8]:
             # execute_horizon=max(1, inference_delay)
-            for vel_target in [0.1,0.3,0.5,0.7, 0.8, 0.9, 1.0, 1.1, 1.3, 1.5]:
+            # for vel_target in [0.1,0.3,0.5,0.7, 0.8, 0.9, 1.0, 1.1, 1.3, 1.5]:
+            for vel_target in [0.0, 0.3, 0.6, 0.8, 1.0, 1.2, 1.4]:
+            # for vel_target in [0.0, 0.1,0.3,0.5,0.7, 0.9, 1.1, 1.3]:
+            # for vel_target in [0.0]:
                 #
-
-                levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4) #change to vel_y=something here if needed
+                if 'hard_lunar_lander' in level_paths[0]:
+                    # print(f'training LL, target moving at vel{vel_target}')
+                    levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4) #change to vel_y=something here if needed
+                elif 'grasp' in level_paths[0]:
+                    # print(f'training grasp, randomizing target location')
+                    
+                    levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=10)
+                else:
+                    print('*** Level not recognized DR not implemented')
+                
                 
                 print(f"{inference_delay=} {execute_horizon=} {vel_target=}")
                 c = dataclasses.replace(
                     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=NaiveMethodConfig()
                 )
-                if weak_state_dicts is None:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
-                else:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+                out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
                 for i in range(len(level_paths)):
                     for k, v in out.items():
                         results[k].append(v[i])
                     results["delay"].append(inference_delay)
-                    results["method"].append("naive")
+                    results["method"].append("naive_ca")
+                    results["level"].append(level_paths[i])
+                    results["execute_horizon"].append(execute_horizon)
+                    results["env_vel"].append(vel_target)
+
+                c = dataclasses.replace(
+                    config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=NaiveMethodConfig(mask_action=True)
+                )
+                out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
+                for i in range(len(level_paths)):
+                    for k, v in out.items():
+                        results[k].append(v[i])
+                    results["delay"].append(inference_delay)
+                    results["method"].append("naive_un")
                     results["level"].append(level_paths[i])
                     results["execute_horizon"].append(execute_horizon)
                     results["env_vel"].append(vel_target)
@@ -381,15 +405,25 @@ def main(
                 c = dataclasses.replace(
                     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig()
                 )
-                if weak_state_dicts is None:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
-                else:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+                out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
                 for i in range(len(level_paths)):
                     for k, v in out.items():
                         results[k].append(v[i])
                     results["delay"].append(inference_delay)
-                    results["method"].append("realtime")
+                    results["method"].append("realtime_ca")
+                    results["level"].append(level_paths[i])
+                    results["execute_horizon"].append(execute_horizon)
+                    results["env_vel"].append(vel_target)
+
+                c = dataclasses.replace(
+                    config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig(mask_action=True)
+                )
+                out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
+                for i in range(len(level_paths)):
+                    for k, v in out.items():
+                        results[k].append(v[i])
+                    results["delay"].append(inference_delay)
+                    results["method"].append("realtime_un")
                     results["level"].append(level_paths[i])
                     results["execute_horizon"].append(execute_horizon)
                     results["env_vel"].append(vel_target)
@@ -397,114 +431,126 @@ def main(
                 c = dataclasses.replace(
                     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig()
                 )
-                if weak_state_dicts is None:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
-                else:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+                out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
                 for i in range(len(level_paths)):
                     for k, v in out.items():
                         results[k].append(v[i])
                     results["delay"].append(inference_delay)
-                    results["method"].append("bid")
+                    results["method"].append("bid_ca")
                     results["level"].append(level_paths[i])
                     results["execute_horizon"].append(execute_horizon)
                     results["env_vel"].append(vel_target)
 
+                c = dataclasses.replace(
+                    config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig(mask_action=True)
+                )
+                out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+                for i in range(len(level_paths)):
+                    for k, v in out.items():
+                        results[k].append(v[i])
+                    results["delay"].append(inference_delay)
+                    results["method"].append("bid_un")
+                    results["level"].append(level_paths[i])
+                    results["execute_horizon"].append(execute_horizon)
+                    results["env_vel"].append(vel_target)
+
+                #RTC_hard
                 c = dataclasses.replace(
                     config,
                     inference_delay=inference_delay,
                     execute_horizon=execute_horizon,
                     method=RealtimeMethodConfig(prefix_attention_schedule="zeros"),
                 )
-                if weak_state_dicts is None:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
-                else:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+                out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
                 for i in range(len(level_paths)):
                     for k, v in out.items():
                         results[k].append(v[i])
                     results["delay"].append(inference_delay)
-                    results["method"].append("hard_masking")
-                    results["level"].append(level_paths[i])
-                    results["execute_horizon"].append(execute_horizon)
-                    results["env_vel"].append(vel_target)
-                
-                #CFG
-                c = dataclasses.replace(
-                    config,
-                    inference_delay=inference_delay,
-                    execute_horizon=execute_horizon,
-                    method=CFGMethodConfig(w_1=1.0, w_2=2.0, w_3=2.0),
-                )
-                if weak_state_dicts is None:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
-                else:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
-                for i in range(len(level_paths)):
-                    for k, v in out.items():
-                        results[k].append(v[i])
-                    results["delay"].append(inference_delay)
-                    results["method"].append("cfg122")
+                    results["method"].append("RTC_hard_ca")
                     results["level"].append(level_paths[i])
                     results["execute_horizon"].append(execute_horizon)
                     results["env_vel"].append(vel_target)
 
+                #RTC_hard
                 c = dataclasses.replace(
                     config,
                     inference_delay=inference_delay,
                     execute_horizon=execute_horizon,
-                    method=CFGMethodConfig(w_1=1.0, w_2=0.0, w_3=2.0),
+                    method=RealtimeMethodConfig(prefix_attention_schedule="zeros",mask_action=True),
                 )
-                if weak_state_dicts is None:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
-                else:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+                out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
+
                 for i in range(len(level_paths)):
                     for k, v in out.items():
                         results[k].append(v[i])
                     results["delay"].append(inference_delay)
-                    results["method"].append("cfg102")
+                    results["method"].append("RTC_hard_un")
                     results["level"].append(level_paths[i])
                     results["execute_horizon"].append(execute_horizon)
                     results["env_vel"].append(vel_target)
 
-                c = dataclasses.replace(
-                    config,
-                    inference_delay=inference_delay,
-                    execute_horizon=execute_horizon,
-                    method=CFGMethodConfig(w_1=1.0, w_2=2.0, w_3=0.0),
-                )
-                if weak_state_dicts is None:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
-                else:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
-                for i in range(len(level_paths)):
-                    for k, v in out.items():
-                        results[k].append(v[i])
-                    results["delay"].append(inference_delay)
-                    results["method"].append("cfg120")
-                    results["level"].append(level_paths[i])
-                    results["execute_horizon"].append(execute_horizon)
-                    results["env_vel"].append(vel_target)
+                # #CFG
+                # # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs)
+                # for w_o in [1.5, 2.0, 2.5, 3.5, 4.0]:
+                #     c = dataclasses.replace(
+                #         config,
+                #         inference_delay=inference_delay,
+                #         execute_horizon=execute_horizon,
+                #         method=CFGMethodConfig(w_1=1.0, w_2=1.0, w_3=w_o),
+                #     )
+                #     if weak_state_dicts is None:
+                #         out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
+                #     else:
+                #         out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+                #     for i in range(len(level_paths)):
+                #         for k, v in out.items():
+                #             results[k].append(v[i])
+                #         results["delay"].append(inference_delay)
+                #         results["method"].append(f"cfg:1-1-{w_o}")
+                #         results["level"].append(level_paths[i])
+                #         results["execute_horizon"].append(execute_horizon)
+                #         results["env_vel"].append(vel_target)
 
-                c = dataclasses.replace(
-                    config,
-                    inference_delay=inference_delay,
-                    execute_horizon=execute_horizon,
-                    method=CFGMethodConfig(w_1=0.0, w_2=2.0, w_3=1.0),
-                )
-                if weak_state_dicts is None:
+                # for w_a in [1.0, 1.1, 1.2, 1.3, 1.4 ]:
+                #     c = dataclasses.replace(
+                #         config,
+                #         inference_delay=inference_delay,
+                #         execute_horizon=execute_horizon,
+                #         method=CFGMethodConfig(w_1=1.0, w_2=w_a, w_3=1.0),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs)
+                #     )
+                #     out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
+                #     for i in range(len(level_paths)):
+                #         for k, v in out.items():
+                #             results[k].append(v[i])
+                #         results["delay"].append(inference_delay)
+                #         results["method"].append(f"cfg:1-{w_a}-1")
+                #         results["level"].append(level_paths[i])
+                #         results["execute_horizon"].append(execute_horizon)
+                #         results["env_vel"].append(vel_target)
+
+                # for w in [x * 0.5 for x in range(-2, 9)]  :
+                for w in [-1, -0.9, -0.8, -0.7, -0.6] :
+                    w_ao=1+w
+                    w_o=-w
+                    c = dataclasses.replace(
+                        config,
+                        inference_delay=inference_delay,
+                        execute_horizon=execute_horizon,
+                        method=CFGMethodConfig(w_1=0.5, w_2=0.0, w_3=w_o,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+                    )
                     out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
-                else:
-                    out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
-                for i in range(len(level_paths)):
-                    for k, v in out.items():
-                        results[k].append(v[i])
-                    results["delay"].append(inference_delay)
-                    results["method"].append("cfg021")
-                    results["level"].append(level_paths[i])
-                    results["execute_horizon"].append(execute_horizon)
-                    results["env_vel"].append(vel_target)
+                    for i in range(len(level_paths)):
+                        for k, v in out.items():
+                            results[k].append(v[i])
+                        results["delay"].append(inference_delay)
+                        results["method"].append(f"cfg_wa:{w}")
+                        results["level"].append(level_paths[i])
+                        results["execute_horizon"].append(execute_horizon)
+                        results["env_vel"].append(vel_target)
+
+
+
+
 
 
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)

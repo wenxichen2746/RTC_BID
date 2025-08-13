@@ -231,42 +231,43 @@ class RandomizedResetWrapper(wrappers.UnderspecifiedEnvWrapper):
     This wrapper operates on a single environment. When used with BatchEnvWrapper,
     it will create a different randomization for each environment in the batch.
     """
-    def __init__(self, env, polygon_index: int = 4, min_y: float = 1.0, max_y: float = 4.0):
+    def __init__(self, env, polygon_index: int = 4, xy_min: float = 1.0, xy_max: float = 4.0, move_x_or_y='x'):
         super().__init__(env)
         self.polygon_index = polygon_index
-        self.min_y = min_y
-        self.max_y = max_y
+        self.xy_min = xy_min
+        self.xy_max = xy_max
+        self.x_or_y=move_x_or_y
 
     # def reset_to_level(self, rng, level, params):
 
     #     rng_key, random_pos_key = jax.random.split(rng)
-
     #     original_x_pos = level.polygon.position[self.polygon_index, 0]
-    #     random_y_pos = jax.random.uniform(random_pos_key, shape=(), minval=self.min_y, maxval=self.max_y)
-        
+    #     random_y_pos = jax.random.uniform(random_pos_key, shape=(), minval=self.xy_min, maxval=self.xy_max)
     #     new_position = jnp.array([original_x_pos, random_y_pos])
-
-
     #     new_positions = level.polygon.position.at[self.polygon_index].set(new_position)
     #     polygon_with_new_pos = replace(level.polygon, position=new_positions)
     #     modified_level = replace(level, polygon=polygon_with_new_pos)
 
     #     return self._env.reset_to_level(rng_key, modified_level, params)
     def reset_to_level(self, rng, level, params):
-
-        rng_key, random_pos_key = jax.random.split(rng)
-
-        original_y_pos = level.polygon.position[self.polygon_index, 1]
-        random_x_pos = jax.random.uniform(random_pos_key, shape=(), minval=self.min_y, maxval=self.max_y)
-        
-        new_position = jnp.array([random_x_pos, original_y_pos])
-
-
-        new_positions = level.polygon.position.at[self.polygon_index].set(new_position)
-        polygon_with_new_pos = replace(level.polygon, position=new_positions)
-        modified_level = replace(level, polygon=polygon_with_new_pos)
-
-        return self._env.reset_to_level(rng_key, modified_level, params)
+        if self.x_or_y=='x':
+            rng_key, random_pos_key = jax.random.split(rng)
+            original_y_pos = level.polygon.position[self.polygon_index, 1]
+            random_x_pos = jax.random.uniform(random_pos_key, shape=(), minval=self.xy_min, maxval=self.xy_max)
+            new_position = jnp.array([random_x_pos, original_y_pos])
+            new_positions = level.polygon.position.at[self.polygon_index].set(new_position)
+            polygon_with_new_pos = replace(level.polygon, position=new_positions)
+            modified_level = replace(level, polygon=polygon_with_new_pos)
+            return self._env.reset_to_level(rng_key, modified_level, params)
+        elif self.x_or_y=='y':
+            rng_key, random_pos_key = jax.random.split(rng)
+            original_x_pos = level.polygon.position[self.polygon_index, 0]
+            random_y_pos = jax.random.uniform(random_pos_key, shape=(), minval=self.xy_min, maxval=self.xy_max)
+            new_position = jnp.array([original_x_pos, random_y_pos])
+            new_positions = level.polygon.position.at[self.polygon_index].set(new_position)
+            polygon_with_new_pos = replace(level.polygon, position=new_positions)
+            modified_level = replace(level, polygon=polygon_with_new_pos)
+            return self._env.reset_to_level(rng_key, modified_level, params)
     
     def step_env(self, key, state, action, params):
         """Passes the step call to the wrapped environment."""
@@ -459,7 +460,19 @@ def main(config: Config):
     static_env_params = kenv_state.StaticEnvParams(**LARGE_ENV_PARAMS, frame_skip=FRAME_SKIP)
     env_params = kenv_state.EnvParams()
     env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
-    env = RandomizedResetWrapper(env, polygon_index=4) 
+    print({config.level_paths[0]},"config.level_paths[0]")
+    if 'hard_lunar_lander' in config.level_paths[0]:
+        print(f'training LL, randomizing target location')
+        env = RandomizedResetWrapper(env, polygon_index=4)
+    elif 'grasp' in config.level_paths[0]:
+        print(f'training grasp, randomizing target location')
+        env = RandomizedResetWrapper(env, polygon_index=10)
+    elif 'reach_avoid' in config.level_paths[0]:
+        print(f'training reach&avoid, randomizing obstacles location')
+        env = RandomizedResetWrapper(env, polygon_index=7,move_x_or_y='y')
+
+    else:
+        raise NotImplementedError("*** Level not recognized DR not implemented **")
     env = BatchEnvWrapper(
         wrappers.LogWrapper(
             DenseRewardWrapper(
@@ -491,6 +504,8 @@ def main(config: Config):
         # initial reset
         rng, key = jax.random.split(rng)
         obs, env_state = env.reset_to_level(key, level, env_params)
+
+        jax.debug.print("[init] obs all finite? {}", jnp.all(jnp.isfinite(obs)))
 
         # initialize agent
         action_dim = env.action_space(env_params).shape[0]
@@ -529,6 +544,17 @@ def main(config: Config):
             value = agent.value(step_carry.obs)
             rng, key = jax.random.split(rng)
             next_obs, next_env_state, reward, next_done, info = env.step(key, step_carry.env_state, action, env_params)
+            # jax.debug.print("[update loop] NaN detected in info? {}", jnp.any(jnp.array([jnp.any(jnp.isnan(x)) for x in jax.tree.leaves(info)])))
+            # jax.debug.print("[step] reward all finite? {}", jnp.all(jnp.isfinite(reward)))
+            # jax.debug.print("[step] any reward NaN? {}", jnp.any(jnp.isnan(reward)))
+            # jax.debug.print("[step] reward sample: {}", reward[0])
+
+            # jax.debug.print("[step] any env_state NaN? {}", jnp.any(jnp.array([
+            #     jnp.any(jnp.isnan(x)) for x in jax.tree_util.tree_leaves(next_env_state)
+            # ])))
+
+            # jax.debug.print("[step] sample from env_state: {}", jax.tree_util.tree_map(lambda x: x[0] if isinstance(x, jnp.ndarray) else x, next_env_state))
+
             return (
                 StepCarry(rng=rng, env_state=next_env_state, obs=next_obs, done=next_done),
                 Transition(
