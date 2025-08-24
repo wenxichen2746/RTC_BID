@@ -18,6 +18,8 @@ import tqdm_loggable.auto as tqdm
 import tyro
 
 import cfg_train_expert
+from util.env_dr import *
+
 
 @dataclasses.dataclass
 class Config:
@@ -59,20 +61,8 @@ def main(config: Config):
     level, _, _ = cfg_train_expert.saving.load_from_json_file(config.level_path)
 
     env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
-    if 'hard_lunar_lander' in config.level_path:
-        print(f'training LL, randomizing target location')
-        env = cfg_train_expert.RandomizedResetWrapper(env, polygon_index=4)
-    elif 'grasp' in config.level_path:
-        print(f'training grasp, randomizing target location')
-        env = cfg_train_expert.RandomizedResetWrapper(env, polygon_index=10)
-    elif 'reach_avoid' in config.level_paths[0]:
-        print(f'training reach&avoid, randomizing obstacles location')
-        env = cfg_train_expert.RandomizedResetWrapper(env, polygon_index=8)
-        env = cfg_train_expert.RandomizedResetWrapper(env, polygon_index=7)
+    env= DR_static_wrapper(env,config.level_path)
 
-    else:
-        raise NotImplementedError("*** Level not recognized DR not implemented **")
-    
     env = cfg_train_expert.BatchEnvWrapper(
         wrappers.LogWrapper(
             wrappers.AutoReplayWrapper(

@@ -23,6 +23,7 @@ import tqdm_loggable.auto as tqdm
 import tyro
 import wandb
 
+from util.env_dr import *
 
 @dataclasses.dataclass
 class Config:
@@ -127,12 +128,13 @@ class DenseRewardWrapper(wrappers.GymnaxWrapper):
 
 
 class NoisyActionWrapper(wrappers.UnderspecifiedEnvWrapper):
-    def __init__(self, env):
+    def __init__(self, env,noise_std=0.1):
         super().__init__(env)
+        self.noise_std=noise_std
 
     def step_env(self, key, state, action, params):
         key1, key2 = jax.random.split(key)
-        action = action + jax.random.normal(key1, action.shape) * ACTION_NOISE_STD
+        action = action + jax.random.normal(key1, action.shape) * self.noise_std
         return self._env.step_env(key2, state, action, params)
 
     def reset_to_level(self, rng, level, params):
@@ -225,58 +227,7 @@ class ActObsHistoryWrapper(wrappers.UnderspecifiedEnvWrapper):
         return env_state.stacked_act
 
 
-class RandomizedResetWrapper(wrappers.UnderspecifiedEnvWrapper):
-    """
-    Randomizes the vertical position of a specific polygon upon every reset.
-    This wrapper operates on a single environment. When used with BatchEnvWrapper,
-    it will create a different randomization for each environment in the batch.
-    """
-    def __init__(self, env, polygon_index: int = 4, xy_min: float = 1.0, xy_max: float = 4.0, move_x_or_y='x'):
-        super().__init__(env)
-        self.polygon_index = polygon_index
-        self.xy_min = xy_min
-        self.xy_max = xy_max
-        self.x_or_y=move_x_or_y
 
-    # def reset_to_level(self, rng, level, params):
-
-    #     rng_key, random_pos_key = jax.random.split(rng)
-    #     original_x_pos = level.polygon.position[self.polygon_index, 0]
-    #     random_y_pos = jax.random.uniform(random_pos_key, shape=(), minval=self.xy_min, maxval=self.xy_max)
-    #     new_position = jnp.array([original_x_pos, random_y_pos])
-    #     new_positions = level.polygon.position.at[self.polygon_index].set(new_position)
-    #     polygon_with_new_pos = replace(level.polygon, position=new_positions)
-    #     modified_level = replace(level, polygon=polygon_with_new_pos)
-
-    #     return self._env.reset_to_level(rng_key, modified_level, params)
-    def reset_to_level(self, rng, level, params):
-        if self.x_or_y=='x':
-            rng_key, random_pos_key = jax.random.split(rng)
-            original_y_pos = level.polygon.position[self.polygon_index, 1]
-            random_x_pos = jax.random.uniform(random_pos_key, shape=(), minval=self.xy_min, maxval=self.xy_max)
-            new_position = jnp.array([random_x_pos, original_y_pos])
-            new_positions = level.polygon.position.at[self.polygon_index].set(new_position)
-            polygon_with_new_pos = replace(level.polygon, position=new_positions)
-            modified_level = replace(level, polygon=polygon_with_new_pos)
-            return self._env.reset_to_level(rng_key, modified_level, params)
-        elif self.x_or_y=='y':
-            rng_key, random_pos_key = jax.random.split(rng)
-            original_x_pos = level.polygon.position[self.polygon_index, 0]
-            random_y_pos = jax.random.uniform(random_pos_key, shape=(), minval=self.xy_min, maxval=self.xy_max)
-            new_position = jnp.array([original_x_pos, random_y_pos])
-            new_positions = level.polygon.position.at[self.polygon_index].set(new_position)
-            polygon_with_new_pos = replace(level.polygon, position=new_positions)
-            modified_level = replace(level, polygon=polygon_with_new_pos)
-            return self._env.reset_to_level(rng_key, modified_level, params)
-    
-    def step_env(self, key, state, action, params):
-        """Passes the step call to the wrapped environment."""
-        return self._env.step_env(key, state, action, params)
-
-    # Add this method
-    def action_space(self, params):
-        """Passes the action_space call to the wrapped environment."""
-        return self._env.action_space(params)
 
 def make_squashed_normal_diag(mean, std, num_motor_bindings: int):
     bijector = tfp.bijectors.Blockwise(
@@ -460,19 +411,27 @@ def main(config: Config):
     static_env_params = kenv_state.StaticEnvParams(**LARGE_ENV_PARAMS, frame_skip=FRAME_SKIP)
     env_params = kenv_state.EnvParams()
     env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
-    print({config.level_paths[0]},"config.level_paths[0]")
-    if 'hard_lunar_lander' in config.level_paths[0]:
-        print(f'training LL, randomizing target location')
-        env = RandomizedResetWrapper(env, polygon_index=4)
-    elif 'grasp' in config.level_paths[0]:
-        print(f'training grasp, randomizing target location')
-        env = RandomizedResetWrapper(env, polygon_index=10)
-    elif 'reach_avoid' in config.level_paths[0]:
-        print(f'training reach&avoid, randomizing obstacles location')
-        env = RandomizedResetWrapper(env, polygon_index=7,move_x_or_y='y')
+    env= DR_static_wrapper(env,config.level_paths[0])
+    # print({config.level_paths[0]},"config.level_paths[0]")
+    # if 'hard_lunar_lander' in config.level_paths[0]:
+    #     print(f'training LL, randomizing target location')
+    #     env = RandomizedResetWrapper(env, polygon_index=4)
+    # elif 'grasp' in config.level_paths[0]:
+    #     print(f'training grasp, randomizing target location')
+    #     env = RandomizedResetWrapper(env, polygon_index=10)
+    # elif 'reach_avoid' in config.level_paths[0]:
+    #     print(f'training reach&avoid, randomizing obstacles location')
+    #     env = RandomizedResetWrapper(env, polygon_index=7,move_x_or_y='y')
+    # elif 'place_can' in config.level_paths[0]:
+    #     print(f'training place_can, randomizing obstacles&taget location')
+    #     env = RandomizedResetWrapper(env, polygon_index=[9,10],xy_min=2.3,xy_max=3.3)
+    # elif 'toss_bin' in config.level_paths[0]:
+    #     print(f'training toss_bin, randomizing obstacles&taget location')
+    #     env = RandomizedResetWrapper(env, polygon_index=[9,10,11],xy_min=1.5,xy_max=3.5)
+    # else:
+    #     raise NotImplementedError("*** Level not recognized DR not implemented **")
+    
 
-    else:
-        raise NotImplementedError("*** Level not recognized DR not implemented **")
     env = BatchEnvWrapper(
         wrappers.LogWrapper(
             DenseRewardWrapper(

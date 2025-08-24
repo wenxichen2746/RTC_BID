@@ -450,7 +450,31 @@ class FlowPolicyCFG2(nnx.Module):
         noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
         (x_1, _), _ = jax.lax.scan(step, (noise, 0.0), length=num_steps)
         return x_1
+    
+    def action_cfg_cos(self, rng: jax.Array, context: jax.Array, num_steps: int, w_a: float) -> jax.Array:
+        #u=u(a|o)+ cos_coef*w*(u(a|a',o)-u(a|o))
+        dt = 1.0 / num_steps
+        B = context.shape[0]
+        mask_F = jnp.zeros((B,), dtype=bool)
+        mask_T = jnp.ones((B,), dtype=bool)
 
+        def step(carry, _):
+            x_t, time = carry
+            u_no = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_F)
+            u_ao = self(context, x_t, time, use_null_act=mask_F, use_null_obs=mask_F)
+            u_guid = u_ao - u_no
+            dot = jnp.sum(u_guid * u_no, axis=(1, 2))
+            norm_g = jnp.linalg.norm(u_guid, axis=(1, 2))
+            norm_n = jnp.linalg.norm(u_no, axis=(1, 2))
+            cos_coef = dot / (norm_g * norm_n + 1e-12)
+            cos_coef = jnp.maximum(cos_coef, 0.0).reshape(B, 1, 1)
+            u = u_no + w_a * cos_coef * u_guid
+            return (x_t + dt * u, time + dt), None
+
+        noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
+        (x_1, _), _ = jax.lax.scan(step, (noise, 0.0), length=num_steps)
+        return x_1
+    
     # FM loss with independent drop probabilities for action- and obs-context
     def loss(
         self,
@@ -458,7 +482,7 @@ class FlowPolicyCFG2(nnx.Module):
         context: jax.Array,                         # [B, context_dim]
         action: jax.Array,                          # [B, C, A]
         p_drop_act: float = 0.3, #0.2
-        p_drop_obs: float = 0.0, #0.2
+        p_drop_obs: float = 0.3, #0.2
     ):
         assert action.dtype == jnp.float32
         B = context.shape[0]

@@ -98,11 +98,13 @@ def rollout_and_save_video(level_path, run_path, config=Config(),load=False):
 
 
     static_params = static_params.replace(screen_dim=train_expert.SCREEN_DIM)
+    print(static_params)
     base_env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_params)
     # base_env = DynamicPolygonDriftWrapper(base_env, polygon_index=4, axis="x", drift_per_step=2, min_pos=1, max_pos=5)
-    base_env = RandomizedResetWrapper(base_env, polygon_index=9)
-    base_env = RandomizedResetWrapper(base_env, polygon_index=8)
-    base_env = RandomizedResetWrapper(base_env, polygon_index=10)
+    # base_env = RandomizedResetWrapper(base_env, polygon_index=4)
+    # base_env = RandomizedResetWrapper(base_env, polygon_index=8)
+    # base_env = RandomizedResetWrapper(base_env, polygon_index=[1,10,11],xy_min=2.5,xy_max=3.5)
+    base_env = RandomizedResetWrapper(base_env, polygon_index=[9,10,11],xy_min=1.5,xy_max=3.5)
     base_env=ActObsHistoryWrapper(base_env, act_history_length=4, obs_history_length=1)
     env = train_expert.BatchEnvWrapper(
         wrappers.LogWrapper(
@@ -180,10 +182,11 @@ def rollout_and_save_video(level_path, run_path, config=Config(),load=False):
             frames.append(frame)
 
             obs, env_state, reward, done, info = env.step(key, env_state, action, env_params)
+            # print(info.keys())
             t+=1
             print(f"step{t}")
 
-            if done[0] or t>50:
+            if done[0] or t>30:
                 break
         
 
