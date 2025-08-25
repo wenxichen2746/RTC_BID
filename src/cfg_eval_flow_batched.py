@@ -7,7 +7,14 @@ from cfg_eval_flow import (
     EvalConfig, NaiveMethodConfig, RealtimeMethodConfig, BIDMethodConfig,
     CFGMethodConfig, CFGCOS_MethodConfig, main as _main
 )
-
+'''
+XLA_PYTHON_CLIENT_PREALLOCATE=false \
+XLA_PYTHON_CLIENT_ALLOCATOR=platform \
+uv run src/cfg_eval_flow_batched.py \
+  --run_path ./logs-bc/LL_cfg_a4o1_0804 \
+  --output-dir ./logs-eval-cfg/08_24_LL \
+  --level-paths worlds/l/hard_lunar_lander.json
+'''
 def _gpu_mem():
     pynvml.nvmlInit()
     h = pynvml.nvmlDeviceGetHandleByIndex(int(os.environ.get("CUDA_VISIBLE_DEVICES","0").split(",")[0]))
@@ -126,7 +133,8 @@ def run_batched(
     free_eff = max(0, free - int(reserve_gb*1024**3))
     max_parallel = max(1, min(8, free_eff // per_job))  # hard cap 8
     mem_fraction = None
-
+    print(f"Estimated per-job GPU memory usage: {per_job/1024**2:.1f} MiB")
+    print(f"GPU memory free total: {free/1024**3:.1f} GiB, used: {used/1024**3:.1f} GiB,{max_parallel=}")
     pool = mp.Pool(processes=max_parallel, maxtasksperchild=1)
     t_all0=time.time()
     futs=[]

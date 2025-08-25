@@ -578,29 +578,6 @@ def main(
         #         )
         #         eval_and_record(c,f"cfg2_wo{w_o}_wa{w_a}")
 
-    # test cases
-    # inference_delay=1
-    # for execute_horizon in [1,8]:
-    #     # execute_horizon=max(1, inference_delay)
-    #     # for vel_target in [0.1,0.3,0.5,0.7, 0.8, 0.9, 1.0, 1.1, 1.3, 1.5]:
-        
-    #     for vel_target in [0.1, 0.4, 0.7, 1.0, 1.3]:
-    #     # for vel_target in [0.0, 0.1,0.3,0.5,0.7, 0.9, 1.1, 1.3]:
-    #     # for vel_target in [0.0]:
-    #         print(f"{inference_delay=} {execute_horizon=} {vel_target=}")
-    #         test_noise_std=0.1
-    #         test_methods(config,levels,env,vel_target,inference_delay,execute_horizon,test_noise_std)
-    #     for noisestd in [0.00, 0.1, 0.2, 0.4]:
-    #         print(f"{inference_delay=} {execute_horizon=} {noisestd=}")
-    #         vel_target=0.0
-    #         test_methods(config,levels,env,vel_target,inference_delay,execute_horizon,noisestd)
-    
-    # vel_target=0.0
-    # test_noise_std=0.1
-    # # for execute_horizon in range(max(1, inference_delay), 8 - inference_delay + 1,2):
-    # for execute_horizon in [3,5]:
-    #     print(f"{inference_delay=} {execute_horizon=} {test_noise_std=}")
-    #     test_methods(config,levels,env,vel_target,inference_delay,execute_horizon,test_noise_std)
 
     def fmt_secs(s: float) -> str:
         return str(timedelta(seconds=int(s)))

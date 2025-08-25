@@ -288,7 +288,7 @@ def main(
     context_dim     = raw_obs_dim                                 # 703
     context_obs_index = (0, context_obs_len)                      # (0, 679)
     context_act_index = (context_obs_len, context_obs_len + context_act_len)  # (679, 703)
-    print("=== Context/Env Dimension Debug ===")
+    print("\n\n=== Context/Env Dimension Debug ===")
     print(f"raw_obs_dim:        {raw_obs_dim}")
     print(f"action_dim:         {action_dim}")
     print(f"obs_history_length: {config.obs_history_length}")
@@ -298,7 +298,7 @@ def main(
     print(f"context_dim:        {context_dim}")
     print(f"context_obs_index:  {context_obs_index}")
     print(f"context_act_index:  {context_act_index}")
-    print("===================================")
+    print("===================================\n\n")
 
     # Optional: sanity check—should print (679,)
     sample_obs, *_ = _env.reset_to_level(jax.random.key(0), jax.tree.map(lambda x: x[0], levels), env_params)
