@@ -50,7 +50,7 @@ class Config:
         "worlds/l/car_launch.json",
     )
     batch_size: int = 512
-    num_epochs: int = 48#32 increase to learn null condition
+    num_epochs: int = 36#48#32 increase to learn null condition
     seed: int = 0
 
     eval: _eval.EvalConfig = _eval.EvalConfig()

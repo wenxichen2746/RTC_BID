@@ -253,7 +253,7 @@ def main(
             c = dataclasses.replace(
                 config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=NaiveMethodConfig()
             )
-            out = jax.device_get(_eval(c, rngs, levels, state_dicts))
+            out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
             for i in range(len(level_paths)):
                 for k, v in out.items():
                     results[k].append(v[i])
@@ -265,7 +265,7 @@ def main(
             c = dataclasses.replace(
                 config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig()
             )
-            out = jax.device_get(_eval(c, rngs, levels, state_dicts))
+            out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
             for i in range(len(level_paths)):
                 for k, v in out.items():
                     results[k].append(v[i])
@@ -277,7 +277,7 @@ def main(
             c = dataclasses.replace(
                 config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig()
             )
-            out = jax.device_get(_eval(c, rngs, levels, state_dicts))
+            out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
             for i in range(len(level_paths)):
                 for k, v in out.items():
                     results[k].append(v[i])

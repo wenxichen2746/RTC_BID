@@ -436,23 +436,48 @@ class FlowPolicyCFG2(nnx.Module):
 
         def step(carry, _):
             x_t, time = carry
-
             # compute each term only if its weight is non-zero; otherwise use a zero placeholder
-            coeff_nn = 1.0 - 2.0 * w1
-            u_nn = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_T) if coeff_nn != 0.0 else jnp.zeros_like(x_t)
+            u_nn = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_T) if w1 != 0.0 else jnp.zeros_like(x_t)
             u_an = self(context, x_t, time, use_null_act=mask_F, use_null_obs=mask_T) if w2 != 0.0 else jnp.zeros_like(x_t)
             u_no = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_F) if w3 != 0.0 else jnp.zeros_like(x_t)
             u_ao = self(context, x_t, time, use_null_act=mask_F, use_null_obs=mask_F) if w4 != 0.0 else jnp.zeros_like(x_t)  # (actions, obs)
 
-            u = coeff_nn * u_nn + w2 * u_an + w3 * u_no + w4 * u_ao
+            u = w1 * u_nn + w2 * u_an + w3 * u_no + w4 * u_ao
             return (x_t + dt * u, time + dt), None
 
         noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
         (x_1, _), _ = jax.lax.scan(step, (noise, 0.0), length=num_steps)
         return x_1
     
-    def action_cfg_cos(self, rng: jax.Array, context: jax.Array, num_steps: int, w_a: float) -> jax.Array:
-        #u=u(a|o)+ cos_coef*w*(u(a|a',o)-u(a|o))
+    # def action_cfg_cos(self, rng: jax.Array, context: jax.Array, num_steps: int, w_a: float) -> jax.Array:
+    #     #u=u(a|o)+ cos_coef*w*(u(a|a',o)-u(a|o))
+    #     dt = 1.0 / num_steps
+    #     B = context.shape[0]
+    #     mask_F = jnp.zeros((B,), dtype=bool)
+    #     mask_T = jnp.ones((B,), dtype=bool)
+
+    #     def step(carry, _):
+    #         x_t, time = carry
+    #         u_no = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_F)
+    #         u_ao = self(context, x_t, time, use_null_act=mask_F, use_null_obs=mask_F)
+    #         u_guid = u_ao - u_no
+    #         dot = jnp.sum(u_guid * u_no, axis=(1, 2))
+    #         norm_g = jnp.linalg.norm(u_guid, axis=(1, 2))
+    #         norm_n = jnp.linalg.norm(u_no, axis=(1, 2))
+    #         cos_coef = dot / (norm_g * norm_n + 1e-12)
+    #         cos_coef = jnp.maximum(cos_coef, 0.0).reshape(B, 1, 1)
+    #         u = u_no + w_a * cos_coef * u_guid
+    #         return (x_t + dt * u, time + dt), None
+
+    #     noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
+    #     (x_1, _), _ = jax.lax.scan(step, (noise, 0.0), length=num_steps)
+    #     return x_1
+    def action_cfg_cos(self, rng: jax.Array, context: jax.Array, num_steps: int, w_a: float):
+        """
+        Returns:
+        x_1:        (B, action_chunk_size, action_dim) final action chunk
+        cos_history:(num_steps, B) raw cosine(sim(u_guid, u_no)) per step (unclipped)
+        """
         dt = 1.0 / num_steps
         B = context.shape[0]
         mask_F = jnp.zeros((B,), dtype=bool)
@@ -460,21 +485,68 @@ class FlowPolicyCFG2(nnx.Module):
 
         def step(carry, _):
             x_t, time = carry
+
+            # u_no = u(a|o), u_ao = u(a|a',o), guidance = u_ao - u_no
             u_no = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_F)
             u_ao = self(context, x_t, time, use_null_act=mask_F, use_null_obs=mask_F)
             u_guid = u_ao - u_no
+
+            # raw cosine similarity (before clipping)
             dot = jnp.sum(u_guid * u_no, axis=(1, 2))
             norm_g = jnp.linalg.norm(u_guid, axis=(1, 2))
-            norm_n = jnp.linalg.norm(u_no, axis=(1, 2))
-            cos_coef = dot / (norm_g * norm_n + 1e-12)
-            cos_coef = jnp.maximum(cos_coef, 0.0).reshape(B, 1, 1)
-            u = u_no + w_a * cos_coef * u_guid
-            return (x_t + dt * u, time + dt), None
+            norm_n = jnp.linalg.norm(u_no,   axis=(1, 2))
+            cos_coef_raw = dot / (norm_g * norm_n + 1e-12)     # shape (B,)
 
+            # clip only for the guidance coefficient used in u
+            cos_coef = jnp.maximum(cos_coef_raw, 0.0).reshape(B, 1, 1)
+
+            # update action
+            u = u_no + w_a * cos_coef * u_guid
+            return (x_t + dt * u, time + dt), cos_coef_raw  # collect raw cos per step (B,)
         noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
-        (x_1, _), _ = jax.lax.scan(step, (noise, 0.0), length=num_steps)
-        return x_1
+        (x_1, _), cos_history = jax.lax.scan(step, (noise, 0.0), length=num_steps)
+        # cos_history has shape (num_steps, B)
+        return x_1, cos_history
     
+    def action_cfg_BI_cos(self, rng: jax.Array, context: jax.Array, num_steps: int, w_o: float =1.0, w_a: float =1.0):
+        """
+        Returns:
+        x_1:        (B, action_chunk_size, action_dim) final action chunk
+        cos_history:(num_steps, B) raw cosine(sim(u_guid, u_no)) per step (unclipped)
+        """
+        #u = u(∅,∅) + w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
+        dt = 1.0 / num_steps
+        B = context.shape[0]
+        mask_F = jnp.zeros((B,), dtype=bool)
+        mask_T = jnp.ones((B,), dtype=bool)
+
+        def step(carry, _):
+            x_t, time = carry
+
+            # u_no = u(a|o), u_ao = u(a|a',o), guidance = u_ao - u_no
+            u_nn = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_T)
+            u_no = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_F)
+            u_an = self(context, x_t, time, use_null_act=mask_F, use_null_obs=mask_T)
+            u_guid_o = u_no - u_nn
+            u_guid_a = u_an - u_nn
+
+            # raw cosine similarity (before clipping)
+            dot = jnp.sum(u_guid_o * u_guid_a, axis=(1, 2))
+            norm_o = jnp.linalg.norm(u_guid_o, axis=(1, 2))
+            norm_a = jnp.linalg.norm(u_guid_a,   axis=(1, 2))
+            cos_coef_raw = dot / (norm_o * norm_a + 1e-12)     # shape (B,)
+
+            # clip only for the guidance coefficient used in u
+            cos_coef = jnp.maximum(cos_coef_raw, 0.0).reshape(B, 1, 1)
+
+            # update action
+            u = u_no + w_a * cos_coef * u_guid_a + w_o * u_guid_o
+            return (x_t + dt * u, time + dt), cos_coef_raw  # collect raw cos per step (B,)
+        noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
+        (x_1, _), cos_history = jax.lax.scan(step, (noise, 0.0), length=num_steps)
+        # cos_history has shape (num_steps, B)
+        return x_1, cos_history
+
     # FM loss with independent drop probabilities for action- and obs-context
     def loss(
         self,

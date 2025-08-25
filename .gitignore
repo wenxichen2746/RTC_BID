@@ -1,6 +1,18 @@
 # Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,python,vim
 # Edit at https://www.toptal.com/developers/gitignore?templates=visualstudiocode,python,vim
 
+
+
+# Ignore all folders starting with "logs"
+logs*/
+playground*/
+
+# Also ignore any nested folders/files under them
+logs-*/
+env_video/
+# Optional: ignore Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
 ### Python ###
 # Byte-compiled / optimized / DLL files
 __pycache__/

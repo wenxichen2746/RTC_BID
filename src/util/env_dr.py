@@ -1,9 +1,10 @@
 
 from dataclasses import replace
 import kinetix.environment.wrappers as wrappers
-
-
-
+from dataclasses import replace
+import copy
+import jax.numpy as jnp
+import jax
 
 class RandomizedResetWrapper(wrappers.UnderspecifiedEnvWrapper):
     """
@@ -66,20 +67,54 @@ class RandomizedResetWrapper(wrappers.UnderspecifiedEnvWrapper):
 def DR_static_wrapper(env,level_path):
     print({level_path},"level_path")
     if 'hard_lunar_lander' in level_path:
-        print(f'training LL, randomizing target location')
+        print(f'env: LL, randomizing target location')
         env = RandomizedResetWrapper(env, polygon_index=4)
     elif 'grasp' in level_path:
-        print(f'training grasp, randomizing target location')
+        print(f'env: grasp, randomizing target location')
         env = RandomizedResetWrapper(env, polygon_index=10)
     elif 'reach_avoid' in level_path:
-        print(f'training reach&avoid, randomizing obstacles location')
+        print(f'env: reach&avoid, randomizing obstacles location')
         env = RandomizedResetWrapper(env, polygon_index=7,move_x_or_y='y')
     elif 'place_can' in level_path:
-        print(f'training place_can, randomizing obstacles&taget location')
+        print(f'env: place_can, randomizing obstacles&taget location')
         env = RandomizedResetWrapper(env, polygon_index=[9,10],xy_min=2.3,xy_max=3.3)
     elif 'toss_bin' in level_path:
-        print(f'training toss_bin, randomizing obstacles&taget location')
+        print(f'env: toss_bin, randomizing obstacles&taget location')
         env = RandomizedResetWrapper(env, polygon_index=[9,10,11],xy_min=1.5,xy_max=3.5)
     else:
         raise NotImplementedError("*** Level not recognized DR not implemented **")
     return env
+
+
+
+
+def change_polygon_position_and_velocity(levels, pos_x=None, pos_y=None, vel_x=None, vel_y=None, index=4):
+    # levels: pytree of stacked levels (batched)
+    batch_size = levels.polygon.position.shape[0]
+    new_levels = []
+
+    for batch_idx in range(batch_size):
+        level_mod = copy.deepcopy(jax.tree.map(lambda x: x[batch_idx], levels))
+
+        # Get current position and velocity
+        current_pos = level_mod.polygon.position[index]
+        current_vel = level_mod.polygon.velocity[index]
+
+        # Set new values or keep old ones
+        new_pos = jnp.array([
+            pos_x if pos_x is not None else current_pos[0],
+            pos_y if pos_y is not None else current_pos[1],
+        ])
+        new_vel = jnp.array([
+            vel_x if vel_x is not None else current_vel[0],
+            vel_y if vel_y is not None else current_vel[1],
+        ])
+
+        # Replace position and velocity
+        new_positions = level_mod.polygon.position.at[index].set(new_pos)
+        new_velocities = level_mod.polygon.velocity.at[index].set(new_vel)
+        new_polygon = replace(level_mod.polygon, position=new_positions, velocity=new_velocities)
+        level_mod = replace(level_mod, polygon=new_polygon)
+        new_levels.append(level_mod)
+
+    return jax.tree.map(lambda *x: jnp.stack(x), *new_levels)
