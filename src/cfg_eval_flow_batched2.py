@@ -285,12 +285,12 @@ def main(
     run_path: str,
     config: EvalConfig = EvalConfig(),
     level_paths: Sequence[str] = (
-        "worlds/l/hard_lunar_lander.json",
+        "worlds/c/toss_bin.json",
     ),
     seed: int = 0,
     output_dir: str | None = "eval_output",
 ):
-    # --- This initial setup part remains the same ---
+    # --- The initial setup part remains the same ---
     static_env_params = kenv_state.StaticEnvParams(**train_expert.LARGE_ENV_PARAMS, frame_skip=train_expert.FRAME_SKIP)
     env_params = kenv_state.EnvParams()
     levels = train_expert.load_levels(level_paths, static_env_params, env_params)
@@ -350,86 +350,60 @@ def main(
     results = collections.defaultdict(list)
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
     
-    # --- MODIFICATION START: Define the parallel evaluation function ---
+    # --- MODIFICATION START: Define the JIT-compiled evaluation function ---
 
-    # This is the original _eval function, but defined once outside the main loop.
-    # It evaluates ONE method config across ALL levels.
-    @functools.partial(shard_map.shard_map, mesh=mesh, in_specs=(None, pspec, pspec, pspec, pspec, None), out_specs=pspec)
-    @functools.partial(jax.vmap, in_axes=(None, 0, 0, 0, 0, None))
-    def _eval_one_config(config: EvalConfig, rng: jax.Array, level: kenv_state.EnvState, state_dict, weak_state_dict, test_noise_std: float):
-        policy = _model.FlowPolicyCFG2(
-            context_dim=context_dim,
-            action_dim=action_dim,
-            config=config.model,
-            rngs=nnx.Rngs(rng),
-            context_act_index=context_act_index,
-            context_obs_index=context_obs_index,
-        )
-        graphdef, state = nnx.split(policy)
-        state.replace_by_pure_dict(state_dict)
-        policy = nnx.merge(graphdef, state)
-
-        weak_policy = None
-        if weak_state_dict is not None and isinstance(config.method, BIDMethodConfig):
-            graphdef, state = nnx.split(policy)
-            state.replace_by_pure_dict(weak_state_dict)
-            weak_policy = nnx.merge(graphdef, state)
-
-        # Pass the per-task noise_std to the eval function
-        eval_info, video, cos_artifacts = eval(config, env, rng, level, policy, env_params, static_env_params, weak_policy, noise_std=test_noise_std)
-        return eval_info, video, cos_artifacts
-
-    # Now, we create the fully parallelized function by vmapping over the method configs.
-    # It evaluates ALL method configs across ALL levels in one go.
-    @functools.partial(jax.jit, static_argnums=(5,)) # JIT over test_noise_std
-    def run_all_methods_parallel(
-        method_configs, # This will be a batched PyTree of configs
-        rngs_for_methods, # A different RNG for each method
-        levels,
-        state_dicts,
-        weak_state_dicts,
-        test_noise_std
+    # This function evaluates ONE method config across ALL levels.
+    # It is compiled once per unique configuration structure.
+    @functools.partial(jax.jit, static_argnames=("test_noise_std",))
+    def run_eval_for_one_config(
+        config: EvalConfig, 
+        rng: jax.Array, 
+        levels: kenv_state.EnvState, 
+        state_dicts, 
+        weak_state_dicts, 
+        test_noise_std: float
     ):
-        # Vmap over the first two arguments: configs and rngs.
-        # Other arguments are broadcasted to all methods.
-        vmapped_eval = jax.vmap(
-            _eval_one_config, in_axes=(0, 0, None, None, None, None)
-        )
-        return vmapped_eval(method_configs, rngs_for_methods, levels, state_dicts, weak_state_dicts, test_noise_std)
+        @functools.partial(shard_map.shard_map, mesh=mesh, in_specs=(None, pspec, pspec, pspec, pspec, None), out_specs=pspec)
+        @functools.partial(jax.vmap, in_axes=(None, 0, 0, 0, 0, None))
+        def _eval_one_config_vmapped(
+            config: EvalConfig, rng: jax.Array, level: kenv_state.EnvState, state_dict, weak_state_dict, test_noise_std: float
+        ):
+            policy = _model.FlowPolicyCFG2(
+                context_dim=context_dim, action_dim=action_dim, config=config.model,
+                rngs=nnx.Rngs(rng), context_act_index=context_act_index,
+                context_obs_index=context_obs_index,
+            )
+            graphdef, state = nnx.split(policy)
+            state.replace_by_pure_dict(state_dict)
+            policy = nnx.merge(graphdef, state)
+
+            weak_policy = None
+            if weak_state_dict is not None and isinstance(config.method, BIDMethodConfig):
+                graphdef, state = nnx.split(policy)
+                state.replace_by_pure_dict(weak_state_dict)
+                weak_policy = nnx.merge(graphdef, state)
+
+            return eval(config, env, rng, level, policy, env_params, static_env_params, weak_policy, noise_std=test_noise_std)
+
+        # We need a separate RNG for each level being vmapped over.
+        rngs_for_levels = jax.random.split(rng, len(level_paths))
+        return _eval_one_config_vmapped(config, rngs_for_levels, levels, state_dicts, weak_state_dicts, test_noise_std)
 
     # --- MODIFICATION END ---
     
     def fmt_secs(s: float) -> str:
         return str(timedelta(seconds=int(s)))
 
-    # --- Build the full task list first (so we can compute ETA) ---
+    # --- Build the full task list (remains the same) ---
     tasks = []
     inference_delay = 1
-    # extra horizons at fixed vel/noise
     for execute_horizon in [3, 5]:
-        tasks.append({
-            "execute_horizon": execute_horizon,
-            "vel_target": 0.0,
-            "noise_std": 0.1,
-            "label": f"extra_horizon"
-        })
+        tasks.append({"execute_horizon": execute_horizon, "vel_target": 0.0, "noise_std": 0.1, "label": f"extra_horizon"})
     for execute_horizon in [1, 8]:
-        # velocity sweeps
         for vel_target in [0.1, 0.4, 0.7, 1.0, 1.3]:
-            tasks.append({
-                "execute_horizon": execute_horizon,
-                "vel_target": vel_target,
-                "noise_std": 0.1,
-                "label": f"vel_target={vel_target:.2f}"
-            })
-        # noise sweeps at static target
+            tasks.append({"execute_horizon": execute_horizon, "vel_target": vel_target, "noise_std": 0.1, "label": f"vel_target={vel_target:.2f}"})
         for noisestd in [0.00, 0.1, 0.2, 0.4]:
-            tasks.append({
-                "execute_horizon": execute_horizon,
-                "vel_target": 0.0,
-                "noise_std": noisestd,
-                "label": f"noise_std={noisestd:.2f}"
-            })
+            tasks.append({"execute_horizon": execute_horizon, "vel_target": 0.0, "noise_std": noisestd, "label": f"noise_std={noisestd:.2f}"})
 
     # --- Run with timing / ETA ---
     durations = []
@@ -446,60 +420,48 @@ def main(
         
         t0 = time.time()
         
-        # --- MODIFICATION START: Parallel execution logic ---
+        # --- MODIFICATION START: Asynchronous dispatch logic ---
 
         # 1. Prepare environment for the current task
-        current_levels = copy.deepcopy(levels) # Avoid modifying the original levels
-        if 'hard_lunar_lander' in level_paths[0]:    
-            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=1,vel_x=vel_target, index=4)
-        elif 'grasp' in level_paths[0]:
-            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=1,vel_x=vel_target, index=10)
-        # ... (add other elif for other envs as in original code)
-        elif 'toss_bin' in level_paths[0]:
-            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=None,vel_x=vel_target, index=9)
-            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=None,vel_x=vel_target, index=10)
-            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=None,vel_x=vel_target, index=11)
-        elif 'place_can_easy' in level_paths[0]:
-            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=2,vel_x=vel_target, index=9)
-            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=2.5,vel_x=vel_target, index=10)
+        current_levels = copy.deepcopy(levels)
+        if 'toss_bin' in level_paths[0]:
+            print(f"{level_paths} level_path")
+            print(f"env: toss_bin, randomizing obstacles&taget location")
+            current_levels = randomize_toss_bin_obstacles_and_target(current_levels)
+        # Add other elif blocks for different environments here...
         else:
-            raise NotImplementedError("*** Level not recognized DR not implemented **")
-        
-        if vel_target == 0.0:
-            env = DR_static_wrapper(env, level_paths[0])
+            print(f"WARNING: No domain randomization specified for level: {level_paths[0]}")
 
         # 2. Get all method configs for this task
         method_names, method_configs = get_all_method_configs(
             config, inference_delay, execute_horizon, weak_state_dicts is not None
         )
         
-        # 3. Create a batch of configs and RNGs for vmap
-        # JAX's tree_map can stack a list of dataclasses into a single "batched" dataclass
-        batched_configs = jax.tree.map(lambda *x: jnp.stack(x), *method_configs)
-        
+        # 3. Launch all evaluations asynchronously
         main_rng_key, method_rng_key = jax.random.split(main_rng_key)
-        # We need a separate base RNG for each method
         rngs_for_methods = jax.random.split(method_rng_key, len(method_names))
-        # The inner vmap (over levels) will split these further, so we provide one key per level for each method
-        rngs_for_methods_and_levels = jax.vmap(lambda key: jax.random.split(key, len(level_paths)))(rngs_for_methods)
+        
+        pending_results = []
+        for i in range(len(method_names)):
+            # Launch one computation per method. JAX does not block here.
+            result_future = run_eval_for_one_config(
+                method_configs[i],
+                rngs_for_methods[i],
+                current_levels,
+                state_dicts,
+                weak_state_dicts,
+                test_noise_std
+            )
+            pending_results.append(result_future)
 
-        # 4. Execute all methods in parallel
-        all_outs, _, all_cos_arts = jax.device_get(run_all_methods_parallel(
-            batched_configs,
-            rngs_for_methods_and_levels, # Pass the RNGs split for levels
-            current_levels,
-            state_dicts,
-            weak_state_dicts,
-            test_noise_std
-        ))
+        # 4. Wait for all computations to finish and get results
+        # This is the single synchronization point.
+        final_results = jax.device_get(pending_results)
 
-        # 5. Process the batched results
+        # 5. Process the collected results
         for method_idx, method_name in enumerate(method_names):
-            # Extract results for the current method from the batch dimension
-            out = jax.tree.map(lambda x: x[method_idx], all_outs)
-            cos_art = jax.tree.map(lambda x: x[method_idx], all_cos_arts)
+            out, _, cos_art = final_results[method_idx]
             
-            # This is the logic from your old 'eval_and_record' function
             for i in range(len(level_paths)):
                 for k, v in out.items():
                     results[k].append(v[i])
@@ -514,17 +476,12 @@ def main(
                 ep_mean = np.array(cos_art["episode_mean"]).squeeze()
                 ep_std  = np.array(cos_art["episode_std"]).squeeze()
                 if np.isfinite(ep_mean).any():
-                    # The shape is (B, S), B = num_evals per level, S = num_flow_steps
                     B, S = ep_mean.shape
                     df_cos = pd.DataFrame({
-                        "env_idx": np.repeat(np.arange(B), S),
-                        "step_idx": np.tile(np.arange(S), B),
-                        "cos_mean": ep_mean.reshape(-1),
-                        "cos_std":  ep_std.reshape(-1),
-                        "method": method_name,
-                        "execute_horizon": execute_horizon,
-                        "env_vel": vel_target,
-                        "noise_std": test_noise_std,
+                        "env_idx": np.repeat(np.arange(B), S), "step_idx": np.tile(np.arange(S), B),
+                        "cos_mean": ep_mean.reshape(-1), "cos_std":  ep_std.reshape(-1),
+                        "method": method_name, "execute_horizon": execute_horizon,
+                        "env_vel": vel_target, "noise_std": test_noise_std,
                     })
                     csv_path = pathlib.Path(output_dir) / "cosine_analysis.csv"
                     header = not csv_path.exists()
