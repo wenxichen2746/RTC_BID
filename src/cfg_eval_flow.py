@@ -286,21 +286,41 @@ def main(
     # load policies from best checkpoints by solve rate
     state_dicts = []
     weak_state_dicts = []
+
     for level_path in level_paths:
         level_name = level_path.replace("/", "_").replace(".json", "")
-        log_dirs = list(filter(lambda p: p.is_dir() and p.name.isdigit(), pathlib.Path(run_path).iterdir()))
+        # all numeric dirs in run_path
+        log_dirs = [p for p in pathlib.Path(run_path).iterdir() if p.is_dir() and p.name.isdigit()]
+        if not log_dirs:
+            raise FileNotFoundError(f"No checkpoint dirs found under {run_path}")
+
+        # sort numerically
         log_dirs = sorted(log_dirs, key=lambda p: int(p.name))
-        # load policy
-        with (log_dirs[config.step] / "policies" / f"{level_name}.pkl").open("rb") as f:
+        last_dir = log_dirs[-1]  # largest number = "last"
+
+        # --- load last checkpoint ---
+        last_ckpt = last_dir / "policies" / f"{level_name}.pkl"
+        if not last_ckpt.exists():
+            raise FileNotFoundError(f"Missing {last_ckpt}")
+        with last_ckpt.open("rb") as f:
             state_dicts.append(pickle.load(f))
+
+        # --- load weak checkpoint (explicit folder name) ---
         if config.weak_step is not None:
-            with (log_dirs[config.weak_step] / "policies" / f"{level_name}.pkl").open("rb") as f:
+            weak_dir = pathlib.Path(run_path) / str(config.weak_step)
+            weak_ckpt = weak_dir / "policies" / f"{level_name}.pkl"
+            if not weak_ckpt.exists():
+                raise FileNotFoundError(f"Missing {weak_ckpt}")
+            with weak_ckpt.open("rb") as f:
                 weak_state_dicts.append(pickle.load(f))
+
+    # device put
     state_dicts = jax.device_put(jax.tree.map(lambda *x: jnp.array(x), *state_dicts))
     if config.weak_step is not None:
         weak_state_dicts = jax.device_put(jax.tree.map(lambda *x: jnp.array(x), *weak_state_dicts))
     else:
         weak_state_dicts = None
+
 
     action_dim = _env.action_space(env_params).shape[0]
 
@@ -332,7 +352,7 @@ def main(
 
     # Optional: sanity check—should print (679,)
     sample_obs, *_ = _env.reset_to_level(jax.random.key(0), jax.tree.map(lambda x: x[0], levels), env_params)
-    print(f"env.reset_to_level() sample RAW obs shape: {sample_obs.shape}")
+    # print(f"env.reset_to_level() sample RAW obs shape: {sample_obs.shape}")
     assert sample_obs.shape[-1] == context_dim
     # env = cfg_train_expert.ActObsHistoryWrapper(env, obs_history_length=config.obs_history_length, act_history_length=config.act_history_length)
 
@@ -636,7 +656,7 @@ def main(
             f"avg={fmt_secs(avg)}  ETA={fmt_secs(remaining)}")
         df = pd.DataFrame(results)
         df.to_csv(pathlib.Path(output_dir) / "results.csv", index=False)
-        
+
     t_all = time.time() - t_all0
     print(f"\nAll tasks done in {fmt_secs(t_all)}. "
         f"Mean per task: {fmt_secs(sum(durations)/len(durations))}")

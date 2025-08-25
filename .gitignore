@@ -6,10 +6,12 @@
 # Ignore all folders starting with "logs"
 logs*/
 playground*/
+client_secrets.json
 
 # Also ignore any nested folders/files under them
 logs-*/
 env_video/
+ckpt_util/
 # Optional: ignore Jupyter notebook checkpoints
 .ipynb_checkpoints/
 
