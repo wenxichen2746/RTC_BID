@@ -26,7 +26,8 @@ from datetime import timedelta
 from util.env_dr import *
 import numpy as np
 
-# --- Dataclasses remain the same ---
+# --- Dataclasses and the `eval` function remain unchanged ---
+
 @dataclasses.dataclass(frozen=True)
 class NaiveMethodConfig:
     mask_action: bool = False
@@ -72,7 +73,6 @@ class EvalConfig:
     obs_history_length: int = 1
     act_history_length: int = 4
 
-# --- eval function remains the same ---
 def eval(
     config: EvalConfig,
     env: kenv.environment.Environment,
@@ -171,7 +171,6 @@ def eval(
     )
 
     L, H, B = dones.shape[0], dones.shape[1], dones.shape[2]
-
     dones_flat = dones.reshape(-1, B)
     env_states = jax.tree.map(lambda x: x.reshape(-1, *x.shape[2:]), env_states)
     assert dones_flat.shape[0] >= env_params.max_timesteps, f"{dones_flat.shape=}"
@@ -199,23 +198,24 @@ def eval(
 
 # --- NEW HELPER FUNCTION ---
 def get_all_method_configs(base_config, inference_delay, execute_horizon, weak_policy_is_available):
-    """Generates a list of method configurations to be tested in parallel."""
+    """
+    Generates a list of method configurations to be tested in parallel.
+    This logic is extracted from the original `test_methods` function.
+    """
     method_names = []
     method_configs = []
     
-    cfg_coef = list(range(-1, 5))
-
     def add_method(name, config):
         method_names.append(name)
         method_configs.append(config)
 
-    # CFG-COS
+    cfg_coef = list(range(-1, 5))
+
+    # CFG COS
     for w_a in cfg_coef:
         c = dataclasses.replace(
-            base_config,
-            inference_delay=inference_delay,
-            execute_horizon=execute_horizon,
-            method=CFGCOS_MethodConfig(w_a=w_a),
+            base_config, inference_delay=inference_delay, execute_horizon=execute_horizon,
+            method=CFGCOS_MethodConfig(w_a=w_a)
         )
         add_method(f"cfg_BF_cos:wa{w_a}", c)
 
@@ -236,10 +236,8 @@ def get_all_method_configs(base_config, inference_delay, execute_horizon, weak_p
         w_ao = w
         w_o = 1 - w
         c = dataclasses.replace(
-            base_config,
-            inference_delay=inference_delay,
-            execute_horizon=execute_horizon,
-            method=CFGMethodConfig(w_1=0.0, w_2=0.0, w_3=w_o, w_4=w_ao),
+            base_config, inference_delay=inference_delay, execute_horizon=execute_horizon,
+            method=CFGMethodConfig(w_1=0.0, w_2=0.0, w_3=w_o, w_4=w_ao)
         )
         add_method(f"cfg_BF:wa{w}", c)
 
@@ -248,10 +246,8 @@ def get_all_method_configs(base_config, inference_delay, execute_horizon, weak_p
         w_ao = w
         w_a = 1 - w
         c = dataclasses.replace(
-            base_config,
-            inference_delay=inference_delay,
-            execute_horizon=execute_horizon,
-            method=CFGMethodConfig(w_1=0.0, w_2=w_a, w_3=0.0, w_4=w_ao),
+            base_config, inference_delay=inference_delay, execute_horizon=execute_horizon,
+            method=CFGMethodConfig(w_1=0.0, w_2=w_a, w_3=0.0, w_4=w_ao)
         )
         add_method(f"cfg_BF:wo{w}", c)
 
@@ -260,10 +256,8 @@ def get_all_method_configs(base_config, inference_delay, execute_horizon, weak_p
         w_a = 1
         w_nn = 1 - w_o - w_a
         c = dataclasses.replace(
-            base_config,
-            inference_delay=inference_delay,
-            execute_horizon=execute_horizon,
-            method=CFGMethodConfig(w_1=w_nn, w_2=w_a, w_3=w_o, w_4=0.0),
+            base_config, inference_delay=inference_delay, execute_horizon=execute_horizon,
+            method=CFGMethodConfig(w_1=w_nn, w_2=w_a, w_3=w_o, w_4=0.0)
         )
         add_method(f"cfg_BI:wo{w_o}", c)
 
@@ -271,26 +265,25 @@ def get_all_method_configs(base_config, inference_delay, execute_horizon, weak_p
         w_o = 1
         w_nn = 1 - w_o - w_a
         c = dataclasses.replace(
-            base_config,
-            inference_delay=inference_delay,
-            execute_horizon=execute_horizon,
-            method=CFGMethodConfig(w_1=w_nn, w_2=w_a, w_3=w_o, w_4=0.0),
+            base_config, inference_delay=inference_delay, execute_horizon=execute_horizon,
+            method=CFGMethodConfig(w_1=w_nn, w_2=w_a, w_3=w_o, w_4=0.0)
         )
         add_method(f"cfg_BI:wa{w_a}", c)
         
     return method_names, method_configs
 
 
+# --- REFACTORED main FUNCTION ---
 def main(
     run_path: str,
     config: EvalConfig = EvalConfig(),
     level_paths: Sequence[str] = (
-        "worlds/c/toss_bin.json",
+        "worlds/l/hard_lunar_lander.json",
     ),
     seed: int = 0,
     output_dir: str | None = "eval_output",
 ):
-    # --- The initial setup part remains the same ---
+    # --- Initial setup remains the same ---
     static_env_params = kenv_state.StaticEnvParams(**train_expert.LARGE_ENV_PARAMS, frame_skip=train_expert.FRAME_SKIP)
     env_params = kenv_state.EnvParams()
     levels = train_expert.load_levels(level_paths, static_env_params, env_params)
@@ -301,16 +294,13 @@ def main(
     
     state_dicts = []
     weak_state_dicts = []
-
     for level_path in level_paths:
         level_name = level_path.replace("/", "_").replace(".json", "")
         log_dirs = [p for p in pathlib.Path(run_path).iterdir() if p.is_dir() and p.name.isdigit()]
         if not log_dirs:
             raise FileNotFoundError(f"No checkpoint dirs found under {run_path}")
-
         log_dirs = sorted(log_dirs, key=lambda p: int(p.name))
         last_dir = log_dirs[-1]
-
         last_ckpt = last_dir / "policies" / f"{level_name}.pkl"
         if not last_ckpt.exists():
             raise FileNotFoundError(f"Missing {last_ckpt}")
@@ -332,7 +322,6 @@ def main(
         weak_state_dicts = None
 
     action_dim = _env.action_space(env_params).shape[0]
-
     mesh = jax.make_mesh((jax.local_device_count(),), ("x",))
     pspec = jax.sharding.PartitionSpec("x")
     sharding = jax.sharding.NamedSharding(mesh, pspec)
@@ -340,7 +329,6 @@ def main(
     raw_obs_dim = jax.eval_shape(
         _env.reset_to_level, jax.random.key(0), jax.tree.map(lambda x: x[0], levels), env_params
     )[0].shape[-1]
-    
     context_act_len = config.act_history_length * action_dim
     context_obs_len = raw_obs_dim - context_act_len
     context_dim = raw_obs_dim
@@ -350,10 +338,7 @@ def main(
     results = collections.defaultdict(list)
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
     
-    # --- MODIFICATION START: Define the JIT-compiled evaluation function ---
-
-    # This function evaluates ONE method config across ALL levels.
-    # It is compiled once per unique configuration structure.
+    # --- JIT-compiled function for a single method evaluation ---
     @functools.partial(jax.jit, static_argnames=("test_noise_std",))
     def run_eval_for_one_config(
         config: EvalConfig, 
@@ -363,9 +348,10 @@ def main(
         weak_state_dicts, 
         test_noise_std: float
     ):
+        # This inner function includes the vmap over levels and shard_map
         @functools.partial(shard_map.shard_map, mesh=mesh, in_specs=(None, pspec, pspec, pspec, pspec, None), out_specs=pspec)
         @functools.partial(jax.vmap, in_axes=(None, 0, 0, 0, 0, None))
-        def _eval_one_config_vmapped(
+        def _eval_vmapped(
             config: EvalConfig, rng: jax.Array, level: kenv_state.EnvState, state_dict, weak_state_dict, test_noise_std: float
         ):
             policy = _model.FlowPolicyCFG2(
@@ -385,27 +371,25 @@ def main(
 
             return eval(config, env, rng, level, policy, env_params, static_env_params, weak_policy, noise_std=test_noise_std)
 
-        # We need a separate RNG for each level being vmapped over.
+        # A separate RNG is needed for each level vmapped over.
         rngs_for_levels = jax.random.split(rng, len(level_paths))
-        return _eval_one_config_vmapped(config, rngs_for_levels, levels, state_dicts, weak_state_dicts, test_noise_std)
-
-    # --- MODIFICATION END ---
+        return _eval_vmapped(config, rngs_for_levels, levels, state_dicts, weak_state_dicts, test_noise_std)
     
     def fmt_secs(s: float) -> str:
         return str(timedelta(seconds=int(s)))
 
-    # --- Build the full task list (remains the same) ---
+    # --- Build the full task list ---
     tasks = []
     inference_delay = 1
     for execute_horizon in [3, 5]:
-        tasks.append({"execute_horizon": execute_horizon, "vel_target": 0.0, "noise_std": 0.1, "label": f"extra_horizon"})
+        tasks.append({"execute_horizon": execute_horizon, "vel_target": 0.0, "noise_std": 0.1, "label": "extra_horizon"})
     for execute_horizon in [1, 8]:
         for vel_target in [0.1, 0.4, 0.7, 1.0, 1.3]:
             tasks.append({"execute_horizon": execute_horizon, "vel_target": vel_target, "noise_std": 0.1, "label": f"vel_target={vel_target:.2f}"})
         for noisestd in [0.00, 0.1, 0.2, 0.4]:
             tasks.append({"execute_horizon": execute_horizon, "vel_target": 0.0, "noise_std": noisestd, "label": f"noise_std={noisestd:.2f}"})
 
-    # --- Run with timing / ETA ---
+    # --- Main execution loop with asynchronous dispatch ---
     durations = []
     t_all0 = time.time()
     main_rng_key = jax.random.key(seed)
@@ -420,17 +404,23 @@ def main(
         
         t0 = time.time()
         
-        # --- MODIFICATION START: Asynchronous dispatch logic ---
-
         # 1. Prepare environment for the current task
         current_levels = copy.deepcopy(levels)
-        if 'toss_bin' in level_paths[0]:
-            print(f"{level_paths} level_path")
-            print(f"env: toss_bin, randomizing obstacles&taget location")
-            current_levels = randomize_toss_bin_obstacles_and_target(current_levels)
-        # Add other elif blocks for different environments here...
+        if 'hard_lunar_lander' in level_paths[0]:
+            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=1,vel_x=vel_target, index=4)
+        elif 'grasp' in level_paths[0]:
+            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=1,vel_x=vel_target, index=10)
+        elif 'toss_bin' in level_paths[0]:
+            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=None,vel_x=vel_target, index=9)
+            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=None,vel_x=vel_target, index=10)
+            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=None,vel_x=vel_target, index=11)
+        elif 'place_can_easy' in level_paths[0]:
+            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=2,vel_x=vel_target, index=9)
+            current_levels = change_polygon_position_and_velocity(current_levels, pos_x=2.5,vel_x=vel_target, index=10)
         else:
-            print(f"WARNING: No domain randomization specified for level: {level_paths[0]}")
+            raise NotImplementedError("*** Level not recognized DR not implemented **")
+        
+        current_env = DR_static_wrapper(env,level_paths[0]) if vel_target==0.0 else env
 
         # 2. Get all method configs for this task
         method_names, method_configs = get_all_method_configs(
@@ -454,8 +444,7 @@ def main(
             )
             pending_results.append(result_future)
 
-        # 4. Wait for all computations to finish and get results
-        # This is the single synchronization point.
+        # 4. Wait for all computations to finish and get results from device
         final_results = jax.device_get(pending_results)
 
         # 5. Process the collected results
@@ -486,8 +475,6 @@ def main(
                     csv_path = pathlib.Path(output_dir) / "cosine_analysis.csv"
                     header = not csv_path.exists()
                     df_cos.to_csv(csv_path, mode="a", index=False, header=header)
-        
-        # --- MODIFICATION END ---
         
         dt = time.time() - t0
         durations.append(dt)

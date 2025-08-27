@@ -25,9 +25,44 @@ import copy
 import model as _model
 import train_expert
 import cfg_train_expert
-
+from dataclasses import replace
+import time
+from datetime import timedelta
 
 from util.env_dr import *
+
+def change_polygon_position_and_velocity(levels, pos_x=None, pos_y=None, vel_x=None, vel_y=None, index=4):
+    # levels: pytree of stacked levels (batched)
+    batch_size = levels.polygon.position.shape[0]
+    new_levels = []
+
+    for batch_idx in range(batch_size):
+        level_mod = copy.deepcopy(jax.tree.map(lambda x: x[batch_idx], levels))
+
+        # Get current position and velocity
+        current_pos = level_mod.polygon.position[index]
+        current_vel = level_mod.polygon.velocity[index]
+
+        # Set new values or keep old ones
+        new_pos = jnp.array([
+            pos_x if pos_x is not None else current_pos[0],
+            pos_y if pos_y is not None else current_pos[1],
+        ])
+        new_vel = jnp.array([
+            vel_x if vel_x is not None else current_vel[0],
+            vel_y if vel_y is not None else current_vel[1],
+        ])
+
+        # Replace position and velocity
+        new_positions = level_mod.polygon.position.at[index].set(new_pos)
+        new_velocities = level_mod.polygon.velocity.at[index].set(new_vel)
+        new_polygon = replace(level_mod.polygon, position=new_positions, velocity=new_velocities)
+        level_mod = replace(level_mod, polygon=new_polygon)
+        new_levels.append(level_mod)
+
+    return jax.tree.map(lambda *x: jnp.stack(x), *new_levels)
+
+
 
 
 @dataclasses.dataclass(frozen=True)
@@ -65,7 +100,7 @@ class CFGCOS_MethodConfig:
 @dataclasses.dataclass(frozen=True)
 class EvalConfig:
     step: int = -1
-    weak_step: int = 5 #| None = None
+    weak_step: int | None = None
     num_evals: int = 2048
     num_flow_steps: int = 5
 
@@ -163,7 +198,7 @@ def eval(
             )
         elif isinstance(config.method, CFGCOS_MethodConfig):
             # print('CFG')
-            next_action_chunk,cos_history = policy.action_cfg_cos(
+            next_action_chunk = policy.action_cfg_cos(
                 key,
                 obs, #context (obs,actions)
                 config.num_flow_steps,
@@ -288,7 +323,7 @@ def main(
     context_dim     = raw_obs_dim                                 # 703
     context_obs_index = (0, context_obs_len)                      # (0, 679)
     context_act_index = (context_obs_len, context_obs_len + context_act_len)  # (679, 703)
-    print("\n\n=== Context/Env Dimension Debug ===")
+    print("=== Context/Env Dimension Debug ===")
     print(f"raw_obs_dim:        {raw_obs_dim}")
     print(f"action_dim:         {action_dim}")
     print(f"obs_history_length: {config.obs_history_length}")
@@ -298,7 +333,7 @@ def main(
     print(f"context_dim:        {context_dim}")
     print(f"context_obs_index:  {context_obs_index}")
     print(f"context_act_index:  {context_act_index}")
-    print("===================================\n\n")
+    print("===================================")
 
     # Optional: sanity check—should print (679,)
     sample_obs, *_ = _env.reset_to_level(jax.random.key(0), jax.tree.map(lambda x: x[0], levels), env_params)
@@ -353,13 +388,17 @@ def main(
             levels = change_polygon_position_and_velocity(levels, pos_x=None,vel_x=vel_target, index=9)
             levels = change_polygon_position_and_velocity(levels, pos_x=None,vel_x=vel_target, index=10)
             levels = change_polygon_position_and_velocity(levels, pos_x=None,vel_x=vel_target, index=11)
+        elif 'place_can_easy' in level_paths[0]:
+            # print(f'training grasp, randomizing target location')
+            levels = change_polygon_position_and_velocity(levels, pos_x=2,vel_x=vel_target, index=9)
+            levels = change_polygon_position_and_velocity(levels, pos_x=2.5,vel_x=vel_target, index=10)
         else:
             raise NotImplementedError("*** Level not recognized DR not implemented **")
         if vel_target==0.0:
             env=DR_static_wrapper(env,level_paths[0])
 
-        def eval_and_record(c,method_name,weak_state_dicts=None):
-            out = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
+        def eval_and_record(c,method_name):
+            out = jax.device_get(_eval(c, rngs, levels, state_dicts, None))
             for i in range(len(level_paths)):
                 for k, v in out.items():
                     results[k].append(v[i])
@@ -369,6 +408,7 @@ def main(
                 results["execute_horizon"].append(execute_horizon)
                 results["env_vel"].append(vel_target)
                 results["noise_std"].append(test_noise_std)
+
 
         # naive
         c = dataclasses.replace(
@@ -419,10 +459,9 @@ def main(
             config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig(mask_action=True)
         )
         eval_and_record(c,"BID_un",weak_state_dicts=weak_state_dicts)
-        #CFG
-        # cfg_coef=[x * 0.5 for x in range(2, 8.1)]
-        cfg_coef=[x for x in range(-1, 5)]
 
+        #CFG
+        cfg_coef=[x for x in range(0, 5)]
         for w_a in cfg_coef:
             c = dataclasses.replace(
                 config,
@@ -482,50 +521,62 @@ def main(
             )
             eval_and_record(c,f"cfg_BI:wa{w_a}")
 
+    def fmt_secs(s: float) -> str:
+        return str(timedelta(seconds=int(s)))
+    # --- Build the full task list first (so we can compute ETA) ---
+    tasks = []
+    inference_delay = 1
+    # extra horizons at fixed vel/noise
 
+    for execute_horizon in [1, 8]:
+        # velocity sweeps
+        for vel_target in [0.1, 0.4, 0.7, 1.0, 1.3]:
+            tasks.append({
+                "execute_horizon": execute_horizon,
+                "vel_target": vel_target,
+                "noise_std": 0.1,
+                "label": f"ex_horizon={execute_horizon}, vel_target={vel_target:.2f}"
+            })
+        # noise sweeps at static target
+        for noisestd in [0.00, 0.1, 0.2, 0.4]:
+            tasks.append({
+                "execute_horizon": execute_horizon,
+                "vel_target": 0.0,
+                "noise_std": noisestd,
+                "label": f"ex_horizon={execute_horizon}, noise_std={noisestd:.2f}"
+            })
+    for execute_horizon in [3, 5]:
+        tasks.append({
+            "execute_horizon": execute_horizon,
+            "vel_target": 0.0,
+            "noise_std": 0.1,
+            "label": f"ex_horizon={execute_horizon}"
+        })
+    # --- Run with timing / ETA ---
+    durations = []
+    t_all0 = time.time()
+    for idx, t in enumerate(tasks, start=1):
+        execute_horizon = t["execute_horizon"]
+        vel_target = t["vel_target"]
+        test_noise_std = t["noise_std"]
+        print(f"\n[inference_delay={inference_delay}] "
+            f"[execute_horizon={execute_horizon}] "
+            f"[{t['label']}]  -> running...")
+        t0 = time.time()
+        test_methods(config, levels, env, vel_target, inference_delay, execute_horizon, test_noise_std)
+        dt = time.time() - t0
+        durations.append(dt)
+        avg = sum(durations) / len(durations)
+        remaining = avg * (len(tasks) - idx)
+        print(f"[{idx}/{len(tasks)}] last={fmt_secs(dt)}  "
+            f"avg={fmt_secs(avg)}  ETA={fmt_secs(remaining)}")
+        df = pd.DataFrame(results)
+        df.to_csv(pathlib.Path(output_dir) / "results.csv", index=False)
 
-        #u = 0.5* w_o* u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​ + 0.5*w_a* u(actions,obs) + 0.5*(1-w_a)* u(∅,obs)​​ 
-        #u = (0.5 * w_o + 0.5 * w_a ) * u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​   + 0.5*(1-w_a)* u(∅,obs)​​ 
-        # for w_o in [2,3]:
-        #     for w_a in [2,3]:
-        #         w_ao = 0.5 * w_o + 0.5 * w_a 
-        #         w_an = 0.5*(1-w_o)
-        #         w_no = 0.5*(1-w_a)
-        #         c = dataclasses.replace(
-        #             config,
-        #             inference_delay=inference_delay,
-        #             execute_horizon=execute_horizon,
-        #             method=CFGMethodConfig(w_1=0.5, w_2=w_an, w_3=w_no,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
-        #         )
-        #         eval_and_record(c,f"cfg2_wo{w_o}_wa{w_a}")
-
-    # test cases
-    # for inference_delay in [1]:
-    #     # for execute_horizon in range(max(1, inference_delay), 8 - inference_delay + 1,2):
-    #     for execute_horizon in [1,8]:
-    #         # execute_horizon=max(1, inference_delay)
-    #         # for vel_target in [0.1,0.3,0.5,0.7, 0.8, 0.9, 1.0, 1.1, 1.3, 1.5]:
-            
-    #         for vel_target in [0.0, 0.3, 0.6, 0.8, 1.0, 1.2]:
-    #         # for vel_target in [0.0, 0.1,0.3,0.5,0.7, 0.9, 1.1, 1.3]:
-    #         # for vel_target in [0.0]:
-    #             print(f"{inference_delay=} {execute_horizon=} {vel_target=}")
-    #             test_noise_std=0.1
-    #             test_methods(config,levels,vel_target,inference_delay,execute_horizon,test_noise_std)
-    #         for noisestd in [0.00, 0.1, 0.2, 0.3, 0.4]:
-    #             print(f"{inference_delay=} {execute_horizon=} {noisestd=}")
-    #             vel_target=0.0
-    #             test_methods(config,levels,vel_target,inference_delay,execute_horizon,noisestd)
-    inference_delay=1
-    vel_target=0.0
-    test_noise_std=0.1
-    for execute_horizon in range(max(1, inference_delay), 8 - inference_delay + 1,2):
-        print(f"{inference_delay=} {execute_horizon=} {test_noise_std=}")
-        test_methods(config,levels,vel_target,inference_delay,execute_horizon,test_noise_std)
-
-    pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame(results)
-    df.to_csv(pathlib.Path(output_dir) / "results.csv", index=False)
+    t_all = time.time() - t_all0
+    print(f"\nAll tasks done in {fmt_secs(t_all)}. "
+        f"Mean per task: {fmt_secs(sum(durations)/len(durations))}")
+    
 
 if __name__ == "__main__":
     tyro.cli(main)
