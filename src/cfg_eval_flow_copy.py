@@ -347,7 +347,7 @@ def main(
 
 
 
-    def test_methods(config,levels,vel_target,inference_delay,execute_horizon,test_noise_std):
+    def test_methods(config,levels,env,vel_target,inference_delay,execute_horizon,test_noise_std):
         @functools.partial(jax.jit, static_argnums=(0,), in_shardings=sharding, out_shardings=sharding)
         @functools.partial(shard_map.shard_map, mesh=mesh, in_specs=(None, pspec, pspec, pspec, pspec), out_specs=pspec)
         @functools.partial(jax.vmap, in_axes=(None, 0, 0, 0, 0))
