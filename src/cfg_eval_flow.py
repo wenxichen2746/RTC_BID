@@ -186,73 +186,67 @@ def eval(
         None,
         length=scan_length,
     )
-    # shapes:
-    #   dones:           (scan_length, execute_horizon, B)
-    #   cos_hist_iters:  (scan_length, B, S)   where S = config.num_flow_steps
-
-    # # Flatten env steps: (T, B)
-    # dones = dones.reshape(-1, *dones.shape[2:])             # -> (T, B)
-    # env_states = jax.tree.map(lambda x: x.reshape(-1, *x.shape[2:]), env_states)
-    # assert dones.shape[0] >= env_params.max_timesteps, f"{dones.shape=}"
-
-    # # Expand cosine histories to per-step by repeating each iteration for execute_horizon steps
-    # cos_hist_steps = jnp.repeat(cos_hist_iters, config.execute_horizon, axis=0)  # (T', B, S)
-    # cos_hist_steps = cos_hist_steps[:env_params.max_timesteps]                   # (T,  B, S)
-
-    # # Mask out steps at/after first done: alive = (cumsum(dones) == 0)
-    # done_csum = jnp.cumsum(dones.astype(jnp.int32), axis=0)  # (T, B)
-    # alive_mask = (done_csum == 0)                            # True before first done
-    # cos_hist_masked = jnp.where(alive_mask[:, :, None], cos_hist_steps, jnp.nan)  # (T, B, S)
-
-    # # Episode mean per batch over time (ignore NaNs)
-    # cos_episode_mean = jnp.nanmean(cos_hist_masked, axis=0)  # (B, S)
-    # cos_episode_std  = jnp.nanstd(cos_hist_masked,  axis=0)  # (B, S)
-
     # shapes from scan:
-    #   dones:           (L = scan_length, H = execute_horizon, B)
-    #   cos_hist_iters:  (L, B, S)   # S = num_flow_steps
-    L, H, B = dones.shape[0], dones.shape[1], dones.shape[2]
+    #   dones:           (L, H, B)
+    #   env_states:      (L, H, ...)
+    #   infos[k]:        (L, H, B) for array-like fields; some keys may be None
+    #   cos_hist_iters:  (L, B, S)
+    L, H, B = dones.shape
+    T = L * H
 
-    # 1) video still needs env-steps
-    dones_flat = dones.reshape(-1, B)  # (T = L*H, B)
-    env_states = jax.tree.map(lambda x: x.reshape(-1, *x.shape[2:]), env_states)
+    # Flatten env-steps (no done/alive masking)
+    dones_flat = dones.reshape(T, B)
+    env_states = jax.tree.map(lambda x: x.reshape(T, *x.shape[2:]), env_states)
+
+    # Safely flatten infos: keep only array-like with (L, H, ...)
+    def _is_array_like(x):
+        return hasattr(x, "shape") and hasattr(x, "reshape")
+
+    infos_flat = {}
+    for k, v in infos.items():
+        if v is None:
+            continue
+        if not _is_array_like(v):
+            continue
+        # Expect (L, H, B) or (L, H, *extra)
+        if v.shape[0] == L and v.shape[1] == H:
+            infos_flat[k] = v.reshape(T, *v.shape[2:])
+        # If it’s already flattened to (T, ...), keep as-is
+        elif v.shape[0] == T:
+            infos_flat[k] = v
+        # Otherwise skip silently (debug print optional)
+        # else:
+        #     print(f"[eval] skipping info '{k}' with shape {v.shape}")
+
     assert dones_flat.shape[0] >= env_params.max_timesteps, f"{dones_flat.shape=}"
 
-    # 2) chunk‑level "done" (any step within the chunk)
-    done_any_in_chunk = jnp.any(dones, axis=1)                   # (L, B)
+    # Episode summaries with NO masking.
+    # For typical log fields that spike at episode end, max over time recovers the episode value.
+    def _episode_stat(x):  # x: (T, B)
+        return jnp.nanmax(x, axis=0)
 
-    # 3) alive mask per chunk: true until (and excluding) the first done-chunk
-    done_cum_chunks = jnp.cumsum(done_any_in_chunk, axis=0)      # (L, B)
-    alive_chunk = (done_cum_chunks == 0)[..., None]              # (L, B, 1)
-
-    # 4) mask cosine history per chunk (avoid any step-vs-chunk broadcasting)
-    cos_hist_masked = jnp.where(alive_chunk, cos_hist_iters, jnp.nan)  # (L, B, S)
-
-    # 5) per-episode summaries across chunks (ignore NaNs after done)
-    cos_episode_mean = jnp.nanmean(cos_hist_masked, axis=0)      # (B, S)
-    cos_episode_std  = jnp.nanstd(cos_hist_masked,  axis=0)      # (B, S)
-
-
-    # # Summaries you already computed
-    # return_info = {}
-    # first_done_idx = jnp.argmax(dones, axis=0)
-    # for key in ["returned_episode_returns", "returned_episode_lengths", "returned_episode_solved"]:
-    #     return_info[key] = infos[key][first_done_idx, jnp.arange(config.num_evals)].mean()
-    # Summaries you already computed (env‑step resolution)
     return_info = {}
-    first_done_idx = jnp.argmax(dones_flat, axis=0)  # (B,)
     for key in ["returned_episode_returns", "returned_episode_lengths", "returned_episode_solved"]:
-        return_info[key] = infos[key][first_done_idx, jnp.arange(config.num_evals)].mean()
+        if key in infos_flat:
+            per_batch = _episode_stat(infos_flat[key])   # (B,)
+            return_info[key] = per_batch.mean()
+
+    # Optional extra scalar logs
+    if "match" in infos_flat:
+        return_info["match"] = jnp.nanmean(infos_flat["match"])
+
+    # Cosine artifacts: keep raw per-chunk; aggregate without masking
+    cos_episode_mean = jnp.nanmean(cos_hist_iters, axis=0)  # (B, S)
+    cos_episode_std  = jnp.nanstd( cos_hist_iters, axis=0)  # (B, S)
+    cos_artifacts = {
+        "per_chunk":    cos_hist_iters,   # (L, B, S)
+        "episode_mean": cos_episode_mean, # (B, S)
+        "episode_std":  cos_episode_std,  # (B, S)
+    }
 
     video = render_video(jax.tree.map(lambda x: x[:, 0], env_states))
-
-    # Pack cosine artifacts
-    cos_artifacts = {
-        "per_chunk":      cos_hist_masked,   # (L, B, S) with NaNs after done-chunk
-        "episode_mean":   cos_episode_mean,  # (B, S)
-        "episode_std":    cos_episode_std,   # (B, S)
-    }
     return return_info, video, cos_artifacts
+
 
 
 
