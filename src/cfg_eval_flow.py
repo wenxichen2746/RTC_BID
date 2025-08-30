@@ -62,6 +62,11 @@ class CFGCOS_MethodConfig:
     # weights in u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs)
     w_a: float = 1.0
 
+@dataclasses.dataclass(frozen=True)
+class CFG_BI_COS_MethodConfig:
+    #u = u(∅,∅) + cos*w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
+    w_a: float = 1.0
+    w_o= float = 1.0
 
 @dataclasses.dataclass(frozen=True)
 class EvalConfig:
@@ -149,6 +154,12 @@ def eval(
             )
             cos_hist_this = jnp.transpose(cos_hist, (1, 0))  # -> (B, S)
 
+        elif isinstance(config.method, CFG_BI_COS_MethodConfig):
+            # NOTE: your action_cfg_cos returns (x_1, cos_history) with cos_history shape (num_steps, B)
+            next_action_chunk, cos_hist = policy.action_cfg_BI_cos(
+                key, obs, config.num_flow_steps,w_o=config.method.w_o, w_a=config.method.w_a
+            )
+            cos_hist_this = jnp.transpose(cos_hist, (1, 0))  # -> (B, S)
         else:
             raise ValueError(f"Unknown method: {config.method}")
 
@@ -236,12 +247,13 @@ def eval(
         return_info["match"] = jnp.nanmean(infos_flat["match"])
 
     # Cosine artifacts: keep raw per-chunk; aggregate without masking
-    cos_episode_mean = jnp.nanmean(cos_hist_iters, axis=0)  # (B, S)
-    cos_episode_std  = jnp.nanstd( cos_hist_iters, axis=0)  # (B, S)
+    cos_step_mean = jnp.nanmean(cos_hist_iters, axis=(0, 1))  # (S,)
+    cos_step_std  = jnp.nanstd( cos_hist_iters, axis=(0, 1))  # (S,)
+
     cos_artifacts = {
-        "per_chunk":    cos_hist_iters,   # (L, B, S)
-        "episode_mean": cos_episode_mean, # (B, S)
-        "episode_std":  cos_episode_std,  # (B, S)
+        # "per_chunk":    cos_hist_iters,   # (L, B, S)
+        "episode_mean": cos_step_mean, # (B, 1)
+        "episode_std":  cos_step_std,  # (B, 1)
     }
 
     video = render_video(jax.tree.map(lambda x: x[:, 0], env_states))
@@ -420,27 +432,41 @@ def main(
                 results["env_vel"].append(vel_target)
                 results["noise_std"].append(test_noise_std)
             if cos_art is not None:
-                ep_mean = np.array(cos_art["episode_mean"]).squeeze()     # (B, S)
-                ep_std  = np.array(cos_art["episode_std"]).squeeze()      # (B, S)
+                # episode_mean/std are (S,1) as set above; squeeze → (S,)
+                ep_mean = np.array(cos_art["episode_mean"])  # (S,)
+                ep_std  = np.array(cos_art["episode_std"])   # (S,)
+
                 if np.isfinite(ep_mean).any():
-                    B, S = ep_mean.shape
-                    env_idx = np.repeat(np.arange(B), S)
-                    step_idx = np.tile(np.arange(S), B)
-                    df_cos = pd.DataFrame({
-                        "env_idx": env_idx,
-                        "step_idx": step_idx,
-                        "cos_mean": ep_mean.reshape(-1),
-                        "cos_std":  ep_std.reshape(-1),
+                    S = ep_mean.shape[0]
+
+                    # Overall (across steps) summary from per-step means
+                    cos_overall_mean = float(np.nanmean(ep_mean))
+                    cos_overall_std  = float(np.nanstd(ep_mean))
+
+                    # Build wide dict with dynamic per-step columns
+                    row = {
                         "method": method_name,
                         "execute_horizon": execute_horizon,
                         "env_vel": vel_target,
                         "noise_std": test_noise_std,
-                    })
+                        "cos_overall_mean": cos_overall_mean,
+                        "cos_overall_std":  cos_overall_std,
+                    }
+                    # Add per-step means/stds
+                    for s in range(S):
+                        row[f"cos_mean_s{s}"] = float(ep_mean[s])
+                        row[f"cos_std_s{s}"]  = float(ep_std[s])
+
+                    df_cos = pd.DataFrame([row])
+
                     csv_path = pathlib.Path(output_dir) / "cosine_analysis.csv"
                     header = not csv_path.exists()
                     df_cos.to_csv(csv_path, mode="a", index=False, header=header)
 
-        cfg_coef=[x for x in range(-1, 5)]
+
+
+        
+        cfg_coef=[x for x in range(0, 5)]
         for w_a in cfg_coef:
             c = dataclasses.replace(
                 config,
@@ -450,6 +476,90 @@ def main(
             )
             eval_and_record(c,f"cfg_BF_cos:wa{w_a}")
 
+        #enhance guidance on action
+        for w in cfg_coef+[-1]:
+        #u = w* u(actions,obs) + (1-w)* u(∅,obs)​​  =   u(∅,obs)​​  +  w (u(actions,obs)-u(∅,obs)​​)
+            w_ao=w#w_ao=1+w
+            w_o=1-w#w_o=-w
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFGMethodConfig(w_1=0.0, w_2=0.0, w_3=w_o,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+            )
+            eval_and_record(c,f"cfg_BF:wa{w}")
+        #enhance guidance on obs
+        # for w in cfg_coef:
+        # #u = w* u(actions,obs) + (1-w)* u(action,∅)​​  =   u(action,∅)​  +  w (u(actions,obs)-u(action,∅))
+        #     w_ao=w# w_ao=1+w
+        #     w_a=1-w# w_a=-w
+        #     c = dataclasses.replace(
+        #         config,
+        #         inference_delay=inference_delay,
+        #         execute_horizon=execute_horizon,
+        #         method=CFGMethodConfig(w_1=0.0, w_2=w_a, w_3=0.0,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+        #     )
+        #     eval_and_record(c,f"cfg_BF:wo{w}")
+
+        #independence assumption
+        # for w_o in cfg_coef:
+        #     w_a=1
+        #     w_nn=1-w_o-w_a
+        #     c = dataclasses.replace(
+        #         config,
+        #         inference_delay=inference_delay,
+        #         execute_horizon=execute_horizon,
+        #         method=CFGMethodConfig(w_1=w_nn, w_2=w_a, w_3=w_o, w_4=0.0),
+        #         # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+        #     )
+        #     eval_and_record(c,f"cfg_BI:wo{w_o}")
+
+        # for w_a in cfg_coef:
+        #     w_o=1
+        #     w_nn=1-w_o-w_a
+        #     c = dataclasses.replace(
+        #         config,
+        #         inference_delay=inference_delay,
+        #         execute_horizon=execute_horizon,
+        #         method=CFGMethodConfig(w_1=w_nn, w_2=w_a, w_3=w_o, w_4=0.0),
+        #         # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+        #     )
+        #     eval_and_record(c,f"cfg_BI:wa{w_a}")
+        for w in cfg_coef:
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFG_BI_COS_MethodConfig(w_o=w, w_a=w),
+                #u = u(∅,∅) + cos*w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
+            )
+            eval_and_record(c,f"cfg_BI_cos:w{w}")
+
+        for w in cfg_coef:
+            w_nn=1-w-w
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFGMethodConfig(w_1=w_nn, w_2=w, w_3=w, w_4=0.0),
+                # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+            )
+            eval_and_record(c,f"cfg_BI:w{w}")
+
+        #u = 0.5* w_o* u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​ + 0.5*w_a* u(actions,obs) + 0.5*(1-w_a)* u(∅,obs)​​ 
+        #u = (0.5 * w_o + 0.5 * w_a ) * u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​   + 0.5*(1-w_a)* u(∅,obs)​​ 
+        # for w_o in [2,3]:
+        #     for w_a in [2,3]:
+        #         w_ao = 0.5 * w_o + 0.5 * w_a 
+        #         w_an = 0.5*(1-w_o)
+        #         w_no = 0.5*(1-w_a)
+        #         c = dataclasses.replace(
+        #             config,
+        #             inference_delay=inference_delay,
+        #             execute_horizon=execute_horizon,
+        #             method=CFGMethodConfig(w_1=0.5, w_2=w_an, w_3=w_no,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+        #         )
+        #         eval_and_record(c,f"cfg_BF_wo{w_o}_wa{w_a}")
         # naive
         c = dataclasses.replace(
             config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=NaiveMethodConfig()
@@ -501,76 +611,7 @@ def main(
         eval_and_record(c,"BID_un",weak_state_dicts=weak_state_dicts)
         #CFG
         # cfg_coef=[x * 0.5 for x in range(2, 8.1)]
-        
 
-
-
-        #enhance guidance on action
-        for w in cfg_coef+[-1]:
-        #u = w* u(actions,obs) + (1-w)* u(∅,obs)​​  =   u(∅,obs)​​  +  w (u(actions,obs)-u(∅,obs)​​)
-            w_ao=w#w_ao=1+w
-            w_o=1-w#w_o=-w
-            c = dataclasses.replace(
-                config,
-                inference_delay=inference_delay,
-                execute_horizon=execute_horizon,
-                method=CFGMethodConfig(w_1=0.0, w_2=0.0, w_3=w_o,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
-            )
-            eval_and_record(c,f"cfg_BF:wa{w}")
-        #enhance guidance on obs
-        for w in cfg_coef:
-        #u = w* u(actions,obs) + (1-w)* u(action,∅)​​  =   u(action,∅)​  +  w (u(actions,obs)-u(action,∅))
-            w_ao=w# w_ao=1+w
-            w_a=1-w# w_a=-w
-            c = dataclasses.replace(
-                config,
-                inference_delay=inference_delay,
-                execute_horizon=execute_horizon,
-                method=CFGMethodConfig(w_1=0.0, w_2=w_a, w_3=0.0,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
-            )
-            eval_and_record(c,f"cfg_BF:wo{w}")
-
-        #independence assumption
-        for w_o in cfg_coef:
-            w_a=1
-            w_nn=1-w_o-w_a
-            c = dataclasses.replace(
-                config,
-                inference_delay=inference_delay,
-                execute_horizon=execute_horizon,
-                method=CFGMethodConfig(w_1=w_nn, w_2=w_a, w_3=w_o, w_4=0.0),
-                # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
-            )
-            eval_and_record(c,f"cfg_BI:wo{w_o}")
-
-        for w_a in cfg_coef:
-            w_o=1
-            w_nn=1-w_o-w_a
-            c = dataclasses.replace(
-                config,
-                inference_delay=inference_delay,
-                execute_horizon=execute_horizon,
-                method=CFGMethodConfig(w_1=w_nn, w_2=w_a, w_3=w_o, w_4=0.0),
-                # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
-            )
-            eval_and_record(c,f"cfg_BI:wa{w_a}")
-
-
-
-        #u = 0.5* w_o* u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​ + 0.5*w_a* u(actions,obs) + 0.5*(1-w_a)* u(∅,obs)​​ 
-        #u = (0.5 * w_o + 0.5 * w_a ) * u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​   + 0.5*(1-w_a)* u(∅,obs)​​ 
-        # for w_o in [2,3]:
-        #     for w_a in [2,3]:
-        #         w_ao = 0.5 * w_o + 0.5 * w_a 
-        #         w_an = 0.5*(1-w_o)
-        #         w_no = 0.5*(1-w_a)
-        #         c = dataclasses.replace(
-        #             config,
-        #             inference_delay=inference_delay,
-        #             execute_horizon=execute_horizon,
-        #             method=CFGMethodConfig(w_1=0.5, w_2=w_an, w_3=w_no,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
-        #         )
-        #         eval_and_record(c,f"cfg2_wo{w_o}_wa{w_a}")
 
 
     def fmt_secs(s: float) -> str:

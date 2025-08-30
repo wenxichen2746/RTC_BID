@@ -495,14 +495,14 @@ class FlowPolicyCFG2(nnx.Module):
             dot = jnp.sum(u_guid * u_no, axis=(1, 2))
             norm_g = jnp.linalg.norm(u_guid, axis=(1, 2))
             norm_n = jnp.linalg.norm(u_no,   axis=(1, 2))
-            cos_coef_raw = dot / (norm_g * norm_n + 1e-12)     # shape (B,)
+            cos_coef = dot / (norm_g * norm_n + 1e-12)     # shape (B,)
 
             # clip only for the guidance coefficient used in u
-            cos_coef = jnp.maximum(cos_coef_raw, 0.0).reshape(B, 1, 1)
+            # cos_coef = jnp.maximum(cos_coef_raw, 0.0).reshape(B, 1, 1)
 
             # update action
             u = u_no + w_a * cos_coef * u_guid
-            return (x_t + dt * u, time + dt), cos_coef_raw  # collect raw cos per step (B,)
+            return (x_t + dt * u, time + dt), cos_coef  # collect raw cos per step (B,)
         noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
         (x_1, _), cos_history = jax.lax.scan(step, (noise, 0.0), length=num_steps)
         # cos_history has shape (num_steps, B)
@@ -514,7 +514,7 @@ class FlowPolicyCFG2(nnx.Module):
         x_1:        (B, action_chunk_size, action_dim) final action chunk
         cos_history:(num_steps, B) raw cosine(sim(u_guid, u_no)) per step (unclipped)
         """
-        #u = u(∅,∅) + w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
+        #u = u(∅,∅) + cos*w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
         dt = 1.0 / num_steps
         B = context.shape[0]
         mask_F = jnp.zeros((B,), dtype=bool)
@@ -537,10 +537,10 @@ class FlowPolicyCFG2(nnx.Module):
             cos_coef_raw = dot / (norm_o * norm_a + 1e-12)     # shape (B,)
 
             # clip only for the guidance coefficient used in u
-            cos_coef = jnp.maximum(cos_coef_raw, 0.0).reshape(B, 1, 1)
+            # cos_coef = jnp.maximum(cos_coef_raw, 0.0).reshape(B, 1, 1)
 
             # update action
-            u = u_no + w_a * cos_coef * u_guid_a + w_o * u_guid_o
+            u = u_no + w_a * cos_coef_raw * u_guid_a + w_o * u_guid_o
             return (x_t + dt * u, time + dt), cos_coef_raw  # collect raw cos per step (B,)
         noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
         (x_1, _), cos_history = jax.lax.scan(step, (noise, 0.0), length=num_steps)
