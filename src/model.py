@@ -495,8 +495,8 @@ class FlowPolicyCFG2(nnx.Module):
             dot = jnp.sum(u_guid * u_no, axis=(1, 2))
             norm_g = jnp.linalg.norm(u_guid, axis=(1, 2))
             norm_n = jnp.linalg.norm(u_no,   axis=(1, 2))
-            cos_coef = dot / (norm_g * norm_n + 1e-12)     # shape (B,)
-
+            cos_coef_raw = dot / (norm_g * norm_n + 1e-12)     # shape (B,)
+            cos_coef = cos_coef_raw[:, None, None]
             # clip only for the guidance coefficient used in u
             # cos_coef = jnp.maximum(cos_coef_raw, 0.0).reshape(B, 1, 1)
 
@@ -535,13 +535,13 @@ class FlowPolicyCFG2(nnx.Module):
             norm_o = jnp.linalg.norm(u_guid_o, axis=(1, 2))
             norm_a = jnp.linalg.norm(u_guid_a,   axis=(1, 2))
             cos_coef_raw = dot / (norm_o * norm_a + 1e-12)     # shape (B,)
+            cos_coef = cos_coef_raw[:, None, None]  
 
             # clip only for the guidance coefficient used in u
             # cos_coef = jnp.maximum(cos_coef_raw, 0.0).reshape(B, 1, 1)
-
             # update action
-            u = u_no + w_a * cos_coef_raw * u_guid_a + w_o * u_guid_o
-            return (x_t + dt * u, time + dt), cos_coef_raw  # collect raw cos per step (B,)
+            u = u_no + w_a * cos_coef * u_guid_a + w_o * u_guid_o
+            return (x_t + dt * u, time + dt), cos_coef  # collect raw cos per step (B,)
         noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
         (x_1, _), cos_history = jax.lax.scan(step, (noise, 0.0), length=num_steps)
         # cos_history has shape (num_steps, B)
