@@ -66,7 +66,7 @@ class CFGCOS_MethodConfig:
 class CFG_BI_COS_MethodConfig:
     #u = u(∅,∅) + cos*w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
     w_a: float = 1.0
-    w_o= float = 1.0
+    w_o: float = 1.0
 
 @dataclasses.dataclass(frozen=True)
 class EvalConfig:
@@ -252,8 +252,8 @@ def eval(
 
     cos_artifacts = {
         # "per_chunk":    cos_hist_iters,   # (L, B, S)
-        "episode_mean": cos_step_mean, # (B, 1)
-        "episode_std":  cos_step_std,  # (B, 1)
+        "episode_mean": cos_step_mean, # (B, )
+        "episode_std":  cos_step_std,  # (B, )
     }
 
     video = render_video(jax.tree.map(lambda x: x[:, 0], env_states))
@@ -431,37 +431,36 @@ def main(
                 results["execute_horizon"].append(execute_horizon)
                 results["env_vel"].append(vel_target)
                 results["noise_std"].append(test_noise_std)
-            if cos_art is not None:
-                # episode_mean/std are (S,1) as set above; squeeze → (S,)
-                ep_mean = np.array(cos_art["episode_mean"])  # (S,)
-                ep_std  = np.array(cos_art["episode_std"])   # (S,)
+                if cos_art is not None:
+                    ep_mean = np.asarray(cos_art["episode_mean"])  # expected (S,), but be robust
+                    ep_std  = np.asarray(cos_art["episode_std"])   # expected (S,)
 
-                if np.isfinite(ep_mean).any():
-                    S = ep_mean.shape[0]
+                    if np.isfinite(ep_mean).any():
+                        # Reduce any extra dims to scalars safely
+                        def _scalar(x):
+                            return np.nanmean(np.asarray(x)).item()
 
-                    # Overall (across steps) summary from per-step means
-                    cos_overall_mean = float(np.nanmean(ep_mean))
-                    cos_overall_std  = float(np.nanstd(ep_mean))
+                        # Number of steps S (last dim if shape is (..., S))
+                        S = int(ep_mean.shape[-1]) if ep_mean.ndim >= 1 else 1
 
-                    # Build wide dict with dynamic per-step columns
-                    row = {
-                        "method": method_name,
-                        "execute_horizon": execute_horizon,
-                        "env_vel": vel_target,
-                        "noise_std": test_noise_std,
-                        "cos_overall_mean": cos_overall_mean,
-                        "cos_overall_std":  cos_overall_std,
-                    }
-                    # Add per-step means/stds
-                    for s in range(S):
-                        row[f"cos_mean_s{s}"] = float(ep_mean[s])
-                        row[f"cos_std_s{s}"]  = float(ep_std[s])
+                        row = {
+                            "method": method_name,
+                            "execute_horizon": execute_horizon,
+                            "env_vel": vel_target,
+                            "noise_std": test_noise_std,
+                            "cos_overall_mean": float(np.nanmean(ep_mean)),
+                            "cos_overall_std":  float(np.nanstd(ep_mean)),
+                        }
 
-                    df_cos = pd.DataFrame([row])
+                        # Add per-step means/stds using robust scalarization
+                        for s in range(S):
+                            row[f"cos_mean_s{s}"] = _scalar(ep_mean[..., s])
+                            row[f"cos_std_s{s}"]  = _scalar(ep_std[..., s])
 
-                    csv_path = pathlib.Path(output_dir) / "cosine_analysis.csv"
-                    header = not csv_path.exists()
-                    df_cos.to_csv(csv_path, mode="a", index=False, header=header)
+                        df_cos = pd.DataFrame([row])
+                        csv_path = pathlib.Path(output_dir) / "cosine_analysis.csv"
+                        header = not csv_path.exists()
+                        df_cos.to_csv(csv_path, mode="a", index=False, header=header)
 
 
 
