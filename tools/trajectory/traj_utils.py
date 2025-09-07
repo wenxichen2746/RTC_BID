@@ -12,7 +12,7 @@ import cfg_train_expert
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import pathlib
-from typing import Optional
+from typing import Optional, Dict
 
 
 def load_policy(policy_path: str, obs_dim: int, action_dim: int):
@@ -66,7 +66,10 @@ def setup_environment():
             # train_expert.ActionHistoryWrapper(
             #     # train_expert.ObsHistoryWrapper(train_expert.NoisyActionWrapper(env), 4)
             #                 )
-            cfg_train_expert.ActObsHistoryWrapper(cfg_train_expert.NoisyActionWrapper(env), act_history_length=4, obs_history_length=1)
+            cfg_train_expert.ActObsHistoryWrapper(
+                # cfg_train_expert.NoisyActionWrapper(env)
+                env
+                , act_history_length=4, obs_history_length=1)
 
         )
     )
@@ -157,6 +160,106 @@ def generate_trajectory(policy_path: str, level_path: str, max_steps: int = 1000
     for key in traj:
         traj[key] = np.array(traj[key])
     
+    return traj
+
+
+def generate_trajectory_swithing(
+    policy_map: Dict[int, str],
+    level_path: str,
+    max_steps: int = 1000,
+    seed: int = 0,
+    switch_control_interval: int = 1,
+    start_seed: Optional[int] = None,
+):
+    """Generate a single trajectory while switching control among multiple policies.
+
+    - Switches controller every `switch_control_interval` steps.
+    - If `start_seed` is provided and in `policy_map`, starts with that controller.
+    - Returns same fields as `generate_trajectory` plus `controllers` (seed per step).
+    """
+    if switch_control_interval <= 0:
+        # Fallback to single-controller behavior using an arbitrary policy
+        any_seed, any_path = next(iter(policy_map.items()))
+        return generate_trajectory(any_path, level_path, max_steps=max_steps, seed=seed)
+
+    env, env_params, static_env_params = setup_environment()
+    level, _, _ = saving.load_from_json_file(level_path)
+    with open(level_path, 'r') as f:
+        raw_json_data = json.load(f)
+
+    rng = jax.random.key(seed)
+    obs, env_state = env.reset_to_level(rng, level, env_params)
+
+    action_dim = env.action_space(env_params).shape[0]
+    obs_dim = obs.shape[0]
+
+    # Load all policies
+    agents: Dict[int, object] = {}
+    for s, path in policy_map.items():
+        agents[s] = load_policy(path, obs_dim, action_dim)
+
+    seeds = list(agents.keys())
+    # Choose initial controller
+    if start_seed is not None and start_seed in agents:
+        controller = start_seed
+    else:
+        controller = seeds[0]
+
+    traj = {
+        'pos': [],
+        'rot': [],
+        'steps': [],
+        'dones': [],
+        'controllers': [],
+    }
+
+    done = False
+    step_count = 0
+    steps_since_switch = 0
+
+    while not done and step_count < max_steps:
+        # Switch controller if needed (avoid picking same seed when possible)
+        if steps_since_switch >= switch_control_interval:
+            steps_since_switch = 0
+            if len(seeds) > 1:
+                # Pick a different controller uniformly from others
+                others = [s for s in seeds if s != controller]
+                # jax PRNG for reproducibility
+                rng, key = jax.random.split(rng)
+                idx = int(jax.random.randint(key, (), 0, len(others)))
+                controller = others[idx]
+
+        agent = agents[controller]
+
+        rng, key = jax.random.split(rng)
+        mean, std = agent.action(obs)
+        action_dist = train_expert.make_squashed_normal_diag(mean, std, static_env_params.num_motor_bindings)
+        action = action_dist.sample(seed=key)
+
+        rng, key = jax.random.split(rng)
+        next_obs, next_env_state, reward, done, info = env.step(key, env_state, action, env_params)
+        # print(f"infokeys: {list(info.keys())}")
+        green_obj_idx, green_obj_type = get_green_obj_idx(raw_json_data)
+        if green_obj_type == 'polygon':
+            green_obj = env_state.env_state.env_state.env_state.polygon
+        else:
+            green_obj = env_state.env_state.env_state.env_state.circle
+        green_obj_pos = green_obj.position[green_obj_idx]
+        green_obj_rot = green_obj.rotation[green_obj_idx]
+
+        traj['pos'].append(np.array(green_obj_pos))
+        traj['rot'].append(np.array(green_obj_rot))
+        traj['dones'].append(bool(done))
+        traj['steps'].append(step_count)
+        traj['controllers'].append(controller)
+
+        obs = next_obs
+        env_state = next_env_state
+        step_count += 1
+        steps_since_switch += 1
+
+    for key in traj:
+        traj[key] = np.array(traj[key])
     return traj
 
 
