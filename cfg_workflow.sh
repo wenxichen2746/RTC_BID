@@ -56,40 +56,46 @@
 
 # uv run src/cfg_eval_flow.py --run_path ./logs-bc/toss_bin_a4o1_0823_a4o1_dropa3o3_0823 --level-paths "worlds/c/toss_bin.json" --output-dir ./logs-eval-cfg/08_24_toss_bin
 # uv run src/cfg_eval_flow.py --run_path ./logs-bc/place_can_easy_a4o1_dropa3o3_0823 --level-paths "worlds/c/place_can_easy.json" --output-dir ./logs-eval-cfg/08_24_place_can_easy
-uv run src/cfg_eval_flow_batched2.py --run_path ./logs-bc/toss_bin_a4o1_0823_a4o1_dropa3o3_0823 --level-paths "worlds/c/toss_bin.json" --output-dir ./logs-eval-cfg/08_24_toss_bin
-
 # uv run src/cfg_eval_flow.py --run_path ./logs-bc/LL_cfg_a4o1_0804 --level-paths "worlds/l/hard_lunar_lander.json" --output-dir ./logs-eval-cfg/08_24_LL
 # uv run src/cfg_eval_flow.py --run_path ./logs-bc/GraspE_cfg_a4o1_0807 --level-paths "worlds/c/grasp_elavated.json" --output-dir ./logs-eval-cfg/08_24_GraspE
 
 
-XLA_PYTHON_CLIENT_PREALLOCATE=false \
-XLA_PYTHON_CLIENT_ALLOCATOR=platform \
-uv run --with nvidia-ml-py3 src/cfg_eval_flow_batched.py \
-  --run_path ./logs-bc/place_can_easy_a4o1_dropa3o3_0823 \
-  --output-dir ./logs-eval-cfg/08_24_place_can_easy \
-  --level-paths worlds/c/place_can_easy.json
+# XLA_PYTHON_CLIENT_PREALLOCATE=false \
+# XLA_PYTHON_CLIENT_ALLOCATOR=platform \
+# uv run --with nvidia-ml-py3 src/cfg_eval_flow_batched.py \
+#   --run_path ./logs-bc/place_can_easy_a4o1_dropa3o3_0823 \
+#   --output-dir ./logs-eval-cfg/08_24_place_can_easy \
+#   --level-paths worlds/c/place_can_easy.json
 
 
-XLA_PYTHON_CLIENT_PREALLOCATE=false \
-uv run src/cfg_eval_flow.py \
-  --run_path ./logs-bc/LL_cfg_a4o1_0804 \
-  --output-dir ./logs-eval-cfg/08_26_LL \
-  --level-paths worlds/l/hard_lunar_lander.json
+# XLA_PYTHON_CLIENT_PREALLOCATE=false \
+# uv run src/cfg_eval_flow.py \
+#   --run_path ./logs-bc/LL_cfg_a4o1_0804 \
+#   --output-dir ./logs-eval-cfg/08_30_LL \
+#   --level-paths worlds/l/hard_lunar_lander.json
 
-XLA_PYTHON_CLIENT_PREALLOCATE=false \
-uv run src/cfg_eval_flow.py \
-  --run_path ./logs-bc/GraspE_cfg_a4o1_0807 \
-  --output-dir ./logs-eval-cfg/08_26_GraspE \
-  --level-paths worlds/c/grasp_elavated.json
+# XLA_PYTHON_CLIENT_PREALLOCATE=false \
+# uv run src/cfg_eval_flow.py \
+#   --run_path ./logs-bc/GraspE_cfg_a4o1_0807 \
+#   --output-dir ./logs-eval-cfg/08_30_GraspE \
+#   --level-paths worlds/c/grasp_elavated.json
 
-XLA_PYTHON_CLIENT_PREALLOCATE=false \
-uv run src/cfg_eval_flow.py \
-  --run_path ./logs-bc/place_can_easy_a4o1_dropa3o3_0823 \
-  --output-dir ./logs-eval-cfg/08_26_place_can_easy \
-  --level-paths worlds/c/place_can_easy.json
+# XLA_PYTHON_CLIENT_PREALLOCATE=false \
+# uv run src/cfg_eval_flow.py \
+#   --run_path ./logs-bc/place_can_easy_a4o1_dropa3o3_0823 \
+#   --output-dir ./logs-eval-cfg/08_30_place_can_easy \
+#   --level-paths worlds/c/place_can_easy.json
 
-XLA_PYTHON_CLIENT_PREALLOCATE=false \
-uv run src/cfg_eval_flow.py \
-  --run_path ./logs-bc/toss_bin_a4o1_0823_a4o1_dropa3o3_0823 \
-  --output-dir ./logs-eval-cfg/08_26_toss_bin \
-  --level-paths worlds/c/toss_bin.json
+# XLA_PYTHON_CLIENT_PREALLOCATE=false \
+# uv run src/cfg_eval_flow.py \
+#   --run_path ./logs-bc/toss_bin_a4o1_0823_a4o1_dropa3o3_0823 \
+#   --output-dir ./logs-eval-cfg/08_30_toss_bin \
+#   --level-paths worlds/c/toss_bin.json
+
+
+
+# 0907 runs add reward preference to expert training
+uv run src/cfg_train_expert.py --config.level-paths "worlds/l/hard_lunar_lander.json"  --config.wandb_name "0907_hard_lunar_lander"
+uv run src/cfg_train_expert.py --config.level-paths "worlds/c/grasp_elavated.json"  --config.wandb_name "0907_grasp_elavated"
+uv run src/cfg_train_expert.py --config.level-paths "worlds/c/place_can_easy.json"  --config.wandb_name "0907_place_can_easy"
+uv run src/cfg_train_expert.py --config.level-paths "worlds/c/toss_bin.json"  --config.wandb_name "0907_toss_bin" 

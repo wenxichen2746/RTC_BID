@@ -1,7 +1,7 @@
 """Utility wrappers and helpers for Kinetix training.
 
 Exports commonly used wrappers for convenient imports like:
-    from util.env_wrappers import TargetAttractorRewardWrapper, DenseRewardWrapper, BatchEnvWrapper
+    from util.env_wrappers import DenseRewardWrapper, BatchEnvWrapper
 """
 
 from .env_wrappers import (
@@ -10,7 +10,6 @@ from .env_wrappers import (
     NoisyActionWrapper,
     StickyActionWrapper,
     ActObsHistoryWrapper,
-    TargetAttractorRewardWrapper,
     TargetRewardState,
     PreferenceDiversityRewardWrapper,
 )
@@ -21,7 +20,6 @@ __all__ = [
     "NoisyActionWrapper",
     "StickyActionWrapper",
     "ActObsHistoryWrapper",
-    "TargetAttractorRewardWrapper",
     "TargetRewardState",
     "PreferenceDiversityRewardWrapper",
 ]

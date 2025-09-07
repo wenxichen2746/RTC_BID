@@ -14,6 +14,9 @@ env_video/
 ckpt_util/
 # Optional: ignore Jupyter notebook checkpoints
 .ipynb_checkpoints/
+token.json
+wandb/
+
 
 ### Python ###
 # Byte-compiled / optimized / DLL files
@@ -229,4 +232,4 @@ tags
 
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,python,vim
 
-wandb/
+wandb/token.json
