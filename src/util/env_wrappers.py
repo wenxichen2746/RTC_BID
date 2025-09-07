@@ -180,7 +180,8 @@ class PreferenceDiversityRewardWrapper(wrappers.GymnaxWrapper):
         self.norm_factor = norm_factor
 
     def step(self, key, state: TargetRewardState, action, params=None):
-        obs, env_state, reward, done, info = self._env.step_env(key, state.env_state, action, params)
+        # Call underlying Gymnax-style step to preserve wrapper state (e.g., AutoReplay)
+        obs, env_state, reward, done, info = self._env.step(key, state.env_state, action, params)
 
         agent_pos = info.get("agent_position", None)
         if agent_pos is not None:
