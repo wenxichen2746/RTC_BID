@@ -173,7 +173,7 @@ class PreferenceDiversityRewardWrapper(wrappers.GymnaxWrapper):
     - Applies a shaping penalty proportional to distance to target, normalized by norm_factor * params.max_timesteps.
     """
 
-    def __init__(self, env, low: float = 1.0, high: float = 4.0, norm_factor: float = 12.0):
+    def __init__(self, env, low: float = 1.0, high: float = 4.0, norm_factor: float = 9.0):
         super().__init__(env)
         self.low = low
         self.high = high

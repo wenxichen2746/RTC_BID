@@ -171,8 +171,8 @@ def plot_scene_and_multiple_trajectories(json_filepath, traj_dict, save_path=Non
         save_path = pathlib.Path(save_path)
         save_path.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.show()
-
+    # plt.show()
+    plt.close(fig)
 
 def main(config: Config):
     level_path = f"{config.level_paths}/{config.level_name}.json"

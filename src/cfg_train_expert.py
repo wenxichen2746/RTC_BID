@@ -43,7 +43,7 @@ class Config:
         # "worlds/l/car_launch.json",
     )
     seed: int = 32
-    num_seeds: int = 16
+    num_seeds: int = 32
     log_interval: int = 20
     num_updates: int = 1000 #1000
     num_steps: int = 256
