@@ -189,7 +189,7 @@ class FlowPolicy(nnx.Module):
         # when below two are None, it becomes backwards loss only (i.e., rejection sampling)
         bid_weak_policy: Self | None = None,
         bid_k: int | None = None,
-    ) -> jax.Array:
+    ) -> tuple[jax.Array, jax.Array]:
         obs = einops.repeat(obs, "b ... -> (n b) ...", n=n_samples)
         weights = get_prefix_weights(inference_delay, prefix_attention_horizon, self.action_chunk_size, "exp")
 
@@ -198,6 +198,8 @@ class FlowPolicy(nnx.Module):
             return jnp.sum(error * weights[None, None, :], axis=-1)  # [n, b]
 
         strong_actions = einops.rearrange(self.action(rng, obs, num_steps), "(n b) h d -> n b h d", n=n_samples)
+        # Variance across sampled actions captures diversity per chunk; average across action dim -> [b, h]
+        action_variance = jnp.mean(jnp.var(strong_actions, axis=0), axis=-1)
         loss = backward_loss(strong_actions)  # [n, b]
 
         if bid_weak_policy is not None or bid_k is not None:
@@ -221,7 +223,8 @@ class FlowPolicy(nnx.Module):
             loss += forward_loss / n_samples
 
         best_idxs = jnp.argmin(loss, axis=0)  # [b]
-        return jnp.take_along_axis(strong_actions, best_idxs[None, :, None, None], axis=0).squeeze(0)  # [b, h, d]
+        best_actions = jnp.take_along_axis(strong_actions, best_idxs[None, :, None, None], axis=0).squeeze(0)
+        return best_actions, action_variance  # [b, h, d], [b, h]
 
     def realtime_action(
         self,
@@ -586,7 +589,7 @@ class FlowPolicyCFG2(nnx.Module):
         bid_weak_policy: Self | None = None,
         bid_k: int | None = None,
         mask_action: bool = False,
-    ) -> jax.Array:
+    ) -> tuple[jax.Array, jax.Array]:
         obs = einops.repeat(obs, "b ... -> (n b) ...", n=n_samples)
         weights = get_prefix_weights(inference_delay, prefix_attention_horizon, self.action_chunk_size, "exp")
 
@@ -597,6 +600,7 @@ class FlowPolicyCFG2(nnx.Module):
         strong_actions = einops.rearrange(
             self.action(rng, obs, num_steps, mask_action=mask_action), "(n b) h d -> n b h d", n=n_samples
         )
+        action_variance = jnp.mean(jnp.var(strong_actions, axis=0), axis=-1)
         loss = backward_loss(strong_actions)  # [n, b]
 
         if bid_weak_policy is not None or bid_k is not None:
@@ -617,7 +621,8 @@ class FlowPolicyCFG2(nnx.Module):
             loss += forward_loss / n_samples
 
         best_idxs = jnp.argmin(loss, axis=0)  # [b]
-        return jnp.take_along_axis(strong_actions, best_idxs[None, :, None, None], axis=0).squeeze(0)  # [b, h, d]
+        best_actions = jnp.take_along_axis(strong_actions, best_idxs[None, :, None, None], axis=0).squeeze(0)
+        return best_actions, action_variance  # [b, h, d], [b, h]
 
     def realtime_action(
         self,

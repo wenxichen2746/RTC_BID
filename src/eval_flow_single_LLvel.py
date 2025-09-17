@@ -157,7 +157,7 @@ def eval(
             prefix_attention_horizon = policy.action_chunk_size - config.execute_horizon
             if config.method.bid_k is not None:
                 assert weak_policy is not None, "weak_policy is required for BID"
-            next_action_chunk = policy.bid_action(
+            next_action_chunk, _ = policy.bid_action(
                 key,
                 obs,
                 config.num_flow_steps,
@@ -179,7 +179,7 @@ def eval(
             )
             if config.method.bid_k is not None:
                 assert weak_policy is not None, "weak_policy is required for GFD"
-            next_action_chunk = policy.bid_action(
+            next_action_chunk, _ = policy.bid_action(
                 key,
                 obs,
                 config.num_flow_steps,
