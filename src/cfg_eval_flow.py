@@ -245,7 +245,29 @@ def eval(
     for key in ["returned_episode_returns", "returned_episode_lengths", "returned_episode_solved"]:
         if key in infos_flat:
             per_batch = _episode_stat(infos_flat[key])   # (B,)
+            # Keep backward-compatible scalar means
             return_info[key] = per_batch.mean()
+
+            # Add mean/std across parallel envs for episode length/return
+            if key == "returned_episode_lengths":
+                return_info["returned_episode_lengths_mean"] = jnp.nanmean(per_batch)
+                return_info["returned_episode_lengths_std"] = jnp.nanstd(per_batch)
+
+            if key == "returned_episode_returns":
+                return_info["returned_episode_returns_mean"] = jnp.nanmean(per_batch)
+                return_info["returned_episode_returns_std"] = jnp.nanstd(per_batch)
+
+    # If available, also report how long solved episodes took (mean/std over solved envs only)
+    if ("returned_episode_lengths" in infos_flat) and ("returned_episode_solved" in infos_flat):
+        lens_per_batch = _episode_stat(infos_flat["returned_episode_lengths"])  # (B,)
+        solved_mask = _episode_stat(infos_flat["returned_episode_solved"])      # (B,) in {0,1}
+        denom = jnp.maximum(1.0, solved_mask.sum())
+        solved_len_mean = (lens_per_batch * solved_mask).sum() / denom
+        # Compute masked variance safely
+        diffs = (lens_per_batch - solved_len_mean) * solved_mask
+        solved_len_var = (diffs * diffs).sum() / denom
+        return_info["returned_episode_lengths_solved_mean"] = solved_len_mean
+        return_info["returned_episode_lengths_solved_std"] = jnp.sqrt(solved_len_var)
 
     # Optional extra scalar logs
     if "match" in infos_flat:
@@ -510,10 +532,20 @@ def main(
                         header = not csv_path.exists()
                         df_var.to_csv(csv_path, mode="a", index=False, header=header)
 
+        #BID
+        # c = dataclasses.replace(
+        #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig()
+        # )
+        # eval_and_record(c,"BID_ca",weak_state_dicts=weak_state_dicts)
 
+        c = dataclasses.replace(
+            config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig(mask_action=True)
+        )
+        eval_and_record(c,"BID_un",weak_state_dicts=weak_state_dicts)
 
         
-        cfg_coef=[x for x in range(0, 5)]
+        # cfg_coef=[x for x in range(0, 5)]
+        cfg_coef=[x for x in range(0, 3)]
         for w_a in cfg_coef:
             c = dataclasses.replace(
                 config,
@@ -561,26 +593,26 @@ def main(
         #     )
         #     eval_and_record(c,f"cfg_BI:wo{w_o}")
 
-        # for w_a in cfg_coef:
-        #     w_o=1
-        #     w_nn=1-w_o-w_a
-        #     c = dataclasses.replace(
-        #         config,
-        #         inference_delay=inference_delay,
-        #         execute_horizon=execute_horizon,
-        #         method=CFGMethodConfig(w_1=w_nn, w_2=w_a, w_3=w_o, w_4=0.0),
-        #         # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
-        #     )
-        #     eval_and_record(c,f"cfg_BI:wa{w_a}")
-        for w in cfg_coef:
+        for w_a in cfg_coef:
+            w_o=1
+            w_nn=1-w_o-w_a
             c = dataclasses.replace(
                 config,
                 inference_delay=inference_delay,
                 execute_horizon=execute_horizon,
-                method=CFG_BI_COS_MethodConfig(w_o=w, w_a=w),
-                #u = u(∅,∅) + cos*w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
+                method=CFGMethodConfig(w_1=w_nn, w_2=w_a, w_3=w_o, w_4=0.0),
+                # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
             )
-            eval_and_record(c,f"cfg_BI_cos:w{w}")
+            eval_and_record(c,f"cfg_BI:wa{w_a}")
+        # for w in cfg_coef:
+        #     c = dataclasses.replace(
+        #         config,
+        #         inference_delay=inference_delay,
+        #         execute_horizon=execute_horizon,
+        #         method=CFG_BI_COS_MethodConfig(w_o=w, w_a=w),
+        #         #u = u(∅,∅) + cos*w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
+        #     )
+        #     eval_and_record(c,f"cfg_BI_cos:w{w}")
 
         for w in cfg_coef:
             w_nn=1-w-w
@@ -646,16 +678,7 @@ def main(
         )
         eval_and_record(c,"RTC_hard_un",weak_state_dicts=None)
 
-        #BID
-        # c = dataclasses.replace(
-        #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig()
-        # )
-        # eval_and_record(c,"BID_ca",weak_state_dicts=weak_state_dicts)
 
-        c = dataclasses.replace(
-            config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig(mask_action=True)
-        )
-        eval_and_record(c,"BID_un",weak_state_dicts=weak_state_dicts)
         #CFG
         # cfg_coef=[x * 0.5 for x in range(2, 8.1)]
 
@@ -678,6 +701,7 @@ def main(
     for execute_horizon in [1, 8]:
         # velocity sweeps
         for vel_target in [0.1, 0.4, 0.7, 1.0, 1.3]:
+        # for vel_target in [0.7, 1.3]:
             tasks.append({
                 "execute_horizon": execute_horizon,
                 "vel_target": vel_target,
@@ -685,7 +709,8 @@ def main(
                 "label": f"vel_target={vel_target:.2f}"
             })
         # noise sweeps at static target
-        for noisestd in [0.00, 0.1, 0.2, 0.4]:
+        for noisestd in [ 0.1, 0.2, 0.4]:
+        # for noisestd in [0.00, 0.4]:
             tasks.append({
                 "execute_horizon": execute_horizon,
                 "vel_target": 0.0,

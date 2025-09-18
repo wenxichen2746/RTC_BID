@@ -17,3 +17,8 @@ uv run tools/trajectory/plot_multi_traj.py --level_name place_can_easy --policy_
 uv run tools/trajectory/plot_multi_traj.py --level_name grasp_elavated --policy_dir "./logs-expert/0907_grasp_elavated" --level_paths "worlds/c" --switch_control_interval 10
 uv run tools/trajectory/plot_multi_traj.py --level_name hard_lunar_lander --policy_dir "./logs-expert/0907_hard_lunar_lander" --level_paths "worlds/l" --switch_control_interval 10
 
+uv run tools/trajectory/plot_multi_traj.py --level_name toss_bin --policy_dir "./logs-expert/0908_toss_bin" --level_paths "worlds/c" 
+uv run tools/trajectory/plot_multi_traj.py --level_name place_can_easy --policy_dir "./logs-expert/0908_place_can_easy" --level_paths "worlds/c" 
+uv run tools/trajectory/plot_multi_traj.py --level_name grasp_elavated --policy_dir "./logs-expert/0908_grasp_elavated" --level_paths "worlds/c" 
+uv run tools/trajectory/plot_multi_traj.py --level_name hard_lunar_lander --policy_dir "./logs-expert/0908_hard_lunar_lander" --level_paths "worlds/l" 
+

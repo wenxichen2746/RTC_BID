@@ -303,7 +303,7 @@ def main(config: Config):
         rng, key = jax.random.split(rng)
         obs, env_state = env.reset_to_level(key, level, env_params)
 
-        jax.debug.print("[init] obs all finite? {}", jnp.all(jnp.isfinite(obs)))
+        # jax.debug.print("[init] obs all finite? {}", jnp.all(jnp.isfinite(obs)))
 
         # initialize agent
         action_dim = env.action_space(env_params).shape[0]
