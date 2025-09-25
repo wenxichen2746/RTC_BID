@@ -26,17 +26,17 @@ import wandb
 class Config:
     level_paths: Sequence[str] = (
         "worlds/l/grasp_easy.json",
-        # "worlds/l/catapult.json",
-        # "worlds/l/cartpole_thrust.json",
-        # "worlds/l/hard_lunar_lander.json",
-        # "worlds/l/mjc_half_cheetah.json",
-        # "worlds/l/mjc_swimmer.json",
-        # "worlds/l/mjc_walker.json",
-        # "worlds/l/h17_unicycle.json",
-        # "worlds/l/chain_lander.json",
-        # "worlds/l/catcher_v3.json",
-        # "worlds/l/trampoline.json",
-        # "worlds/l/car_launch.json",
+        "worlds/l/catapult.json",
+        "worlds/l/cartpole_thrust.json",
+        "worlds/l/hard_lunar_lander.json",
+        "worlds/l/mjc_half_cheetah.json",
+        "worlds/l/mjc_swimmer.json",
+        "worlds/l/mjc_walker.json",
+        "worlds/l/h17_unicycle.json",
+        "worlds/l/chain_lander.json",
+        "worlds/l/catcher_v3.json",
+        "worlds/l/trampoline.json",
+        "worlds/l/car_launch.json",
     )
     seed: int = 32
     num_seeds: int = 8
@@ -54,6 +54,7 @@ class Config:
     layer_width: int = 256
     grad_norm_clip: float = 1.0
     lr: float = 3e-4
+    run_name: str = None
 
 
 LOG_DIR = pathlib.Path("logs-expert")
@@ -68,7 +69,7 @@ LARGE_ENV_PARAMS = {
 }
 FRAME_SKIP = 2
 SCREEN_DIM = (512, 512)
-ACTION_NOISE_STD = 0.1 #0.1
+ACTION_NOISE_STD = 0.1
 LOG_STD_MIN = -10.0
 LOG_STD_MAX = 2.0
 MEAN_MAX_MAGNITUDE = 5
@@ -509,7 +510,8 @@ def main(config: Config):
         video = render_video(jax.tree.map(lambda x: x[0], rollout))
         return update_carry, (jax.tree.map(jnp.mean, info), video)
 
-    wandb.init(project=WANDB_PROJECT)
+    # wandb.init(project=WANDB_PROJECT)
+    wandb.init(project=WANDB_PROJECT, name=config.run_name)
     wandb.define_metric("num_env_steps")
     wandb.define_metric("*", step_metric="num_env_steps")
     pbar = tqdm.tqdm(total=config.num_updates * config.num_envs * config.num_steps, dynamic_ncols=True)
@@ -531,9 +533,7 @@ def main(config: Config):
                 level_info = jax.tree.map(lambda x: x[seed_idx, level_idx].item(), info)
                 wandb.log({f"{level_name}/{seed_idx}/{k}": v for k, v in level_info.items()}, step=update_idx)
 
-                # log_dir = LOG_DIR / wandb.run.name / f"seed_{seed_idx}" / str(update_idx)
-                run_name = wandb.run.name or "unnamed-run"
-                log_dir = LOG_DIR / run_name / f"seed_{seed_idx}" / str(update_idx)
+                log_dir = LOG_DIR / wandb.run.name / f"seed_{seed_idx}" / str(update_idx)
                 stats_dir = log_dir / "stats"
                 stats_dir.mkdir(parents=True, exist_ok=True)
                 with (stats_dir / f"{level_name}.json").open("w") as f:
