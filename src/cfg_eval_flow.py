@@ -135,7 +135,8 @@ def eval(
             prefix_attention_horizon = policy.action_chunk_size - config.execute_horizon
             next_action_chunk, action_var = policy.bid_action(
                 key, obs, config.num_flow_steps, action_chunk,
-                config.inference_delay, prefix_attention_horizon,
+                config.inference_delay, config.execute_horizon , #<- passing execute_horizon to compare valid overlapping loss
+                prefix_attention_horizon,
                 config.method.n_samples,
                 bid_k=config.method.bid_k,
                 bid_weak_policy=weak_policy if config.method.bid_k is not None else None,
@@ -165,6 +166,18 @@ def eval(
         else:
             raise ValueError(f"Unknown method: {config.method}")
 
+        # Compute overlap continuity loss between previous and new chunks over the valid horizon
+        valid_horizon = max(0, policy.action_chunk_size - config.execute_horizon)
+        def _overlap_loss(prev_chunk, new_chunk):
+            # Compare head of carried previous chunk to head of new chunk
+            prev_overlap = prev_chunk[:, :valid_horizon, :]
+            new_overlap = new_chunk[:, :valid_horizon, :]
+            if valid_horizon == 0:
+                return jnp.zeros(prev_chunk.shape[0])
+            diff = jnp.linalg.norm(new_overlap - prev_overlap, axis=-1)  # (B, valid)
+            return jnp.mean(diff, axis=-1)  # (B,)
+        backward_loss_per_env = _overlap_loss(action_chunk, next_action_chunk)
+
         # Execute actions
         action_chunk_to_execute = jnp.concatenate(
             [ action_chunk[:, : config.inference_delay],
@@ -185,7 +198,7 @@ def eval(
         # Return cos_hist_this per outer iteration (B, S)
         return (
             rng, next_obs, next_env_state, next_action_chunk, next_n
-        ), (dones, env_states, infos, cos_hist_this, action_var_this)
+        ), (dones, env_states, infos, cos_hist_this, action_var_this, backward_loss_per_env)
 
     rng, key = jax.random.split(rng)
     obs, env_state = env.reset_to_level(key, level, env_params)
@@ -195,7 +208,7 @@ def eval(
     n = jnp.ones(action_chunk.shape[1], dtype=jnp.int32)
 
     scan_length = math.ceil(env_params.max_timesteps / config.execute_horizon)
-    _, (dones, env_states, infos, cos_hist_iters, action_var_iters) = jax.lax.scan(
+    _, (dones, env_states, infos, cos_hist_iters, action_var_iters, backward_losses) = jax.lax.scan(
         execute_chunk,
         (rng, obs, env_state, action_chunk, n),
         None,
@@ -272,6 +285,10 @@ def eval(
     # Optional extra scalar logs
     if "match" in infos_flat:
         return_info["match"] = jnp.nanmean(infos_flat["match"])
+
+    # Backward-overlap loss across all outer steps and envs (lower is better)
+    # backward_losses: (L, B)
+    return_info["backward_overlap_loss"] = jnp.nanmean(backward_losses)
 
     # Cosine artifacts: keep raw per-chunk; aggregate without masking
     cos_step_mean = jnp.nanmean(cos_hist_iters, axis=(0, 1))  # (S,)
@@ -454,6 +471,10 @@ def main(
             # print(f'training grasp, randomizing target location')
             levels = change_polygon_position_and_velocity(levels, pos_x=2,vel_x=vel_target, index=9)
             levels = change_polygon_position_and_velocity(levels, pos_x=2.5,vel_x=vel_target, index=10)
+        elif 'drone' in level_paths[0]:
+            # print(f'training grasp, randomizing target location')
+            levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4)
+            levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=7)
         else:
             raise NotImplementedError("*** Level not recognized DR not implemented **")
         if vel_target==0.0:
@@ -691,7 +712,7 @@ def main(
     tasks = []
     inference_delay = 1
     # extra horizons at fixed vel/noise
-    for execute_horizon in [3, 5]:
+    for execute_horizon in [2, 3, 4, 5, 6, 7]:
         tasks.append({
             "execute_horizon": execute_horizon,
             "vel_target": 0.0,
@@ -700,7 +721,7 @@ def main(
         })
     for execute_horizon in [1, 8]:
         # velocity sweeps
-        for vel_target in [0.1, 0.4, 0.7, 1.0, 1.3]:
+        for vel_target in [0.4, 0.8, 1.2]:
         # for vel_target in [0.7, 1.3]:
             tasks.append({
                 "execute_horizon": execute_horizon,

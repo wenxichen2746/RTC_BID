@@ -22,30 +22,30 @@ for level in "${levels[@]}"; do
   echo "\n=== Level: $level | run_name=$name ==="
 
   # Step 1: Train expert policies (writes to ./logs-expert/${name})
-  echo "[1/4] Training expert..."
-  uv run src/train_expert.py \
-    --config.level-paths "$level" \
-    --config.run_name "$name"
+  # echo "[1/4] Training expert..."
+  # uv run src/train_expert.py \
+  #   --config.level-paths "$level" \
+  #   --config.run_name "$name"
 
-  # Step 2: Generate trajectories from best expert checkpoints
-  # Data saved to ./logs-expert/${name}/data
-  echo "[2/4] Generating data..."
-  uv run src/generate_data.py \
-    --config.run-path "./logs-expert/${name}" \
-    --config.level-paths "$level"
+  # # Step 2: Generate trajectories from best expert checkpoints
+  # # Data saved to ./logs-expert/${name}/data
+  # echo "[2/4] Generating data..."
+  # uv run src/generate_data.py \
+  #   --config.run-path "./logs-expert/${name}" \
+  #   --config.level-paths "$level"
 
-  # Step 3: Train imitation (flow) policies
-  # Name BC run the same as expert via WANDB_NAME for consistent local path ./logs-bc/${name}
-  echo "[3/4] Training flow (BC)..."
-  WANDB_NAME="$name" uv run src/train_flow.py \
-    --config.run-path "./logs-expert/${name}" \
-    --config.level-paths "$level"
+  # # Step 3: Train imitation (flow) policies
+  # # Name BC run the same as expert via WANDB_NAME for consistent local path ./logs-bc/${name}
+  # echo "[3/4] Training flow (BC)..."
+  # WANDB_NAME="$name" uv run src/train_flow.py \
+  #   --config.run-path "./logs-expert/${name}" \
+  #   --config.level-paths "$level"
 
   # Step 4: Evaluate BC policies (default methods; results.csv under ./logs-eval/${name})
   echo "[4/4] Evaluating flow..."
   uv run src/eval_flow.py \
     --run-path "./logs-bc/${name}" \
-    --output-dir "./logs-eval/${name}" \
+    --output-dir "./logs-eval/0927_${name}" \
     --level-paths "$level"
 
   echo "=== Completed pipeline for ${name} ===\n"

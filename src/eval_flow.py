@@ -108,6 +108,7 @@ def eval(
                 config.num_flow_steps,
                 action_chunk,
                 config.inference_delay,
+                config.execute_horizon, #<- passing execute_horizon to compare valid overlapping loss
                 prefix_attention_horizon,
                 config.method.n_samples,
                 bid_k=config.method.bid_k,
@@ -115,6 +116,20 @@ def eval(
             )
         else:
             raise ValueError(f"Unknown method: {config.method}")
+
+        # Compute overlap continuity loss between previous and new chunks over the valid horizon
+        valid_horizon = max(0, policy.action_chunk_size - config.execute_horizon)
+        def _overlap_loss(prev_chunk, new_chunk):
+            # prev_chunk/new_chunk: (B, S, A)
+            # Compare the carried previous chunk's HEAD (which equals last valid_horizon
+            # of the prior unshifted chunk) with the new chunk's HEAD.
+            prev_overlap = prev_chunk[:, :valid_horizon, :]
+            new_overlap = new_chunk[:, :valid_horizon, :]
+            if valid_horizon == 0:
+                return jnp.zeros(prev_chunk.shape[0])
+            diff = jnp.linalg.norm(new_overlap - prev_overlap, axis=-1)  # (B, valid)
+            return jnp.mean(diff, axis=-1)  # (B,)
+        backward_loss_per_env = _overlap_loss(action_chunk, next_action_chunk)
 
         # we execute `inference_delay` actions from the *previously generated* action chunk, and then the remaining
         # `execute_horizon - inference_delay` actions from the newly generated action chunk
@@ -140,7 +155,7 @@ def eval(
         )
         # if config.inference_delay > 0:
         #     infos["match"] = jnp.mean(jnp.abs(fixed_prefix - action_chunk_to_execute))
-        return (rng, next_obs, next_env_state, next_action_chunk, next_n), (dones, env_states, infos)
+        return (rng, next_obs, next_env_state, next_action_chunk, next_n), (dones, env_states, infos, backward_loss_per_env)
 
     rng, key = jax.random.split(rng)
     obs, env_state = env.reset_to_level(key, level, env_params)
@@ -148,19 +163,23 @@ def eval(
     action_chunk = policy.action(key, obs, config.num_flow_steps)  # [batch, horizon, action_dim]
     n = jnp.ones(action_chunk.shape[1], dtype=jnp.int32)
     scan_length = math.ceil(env_params.max_timesteps / config.execute_horizon)
-    _, (dones, env_states, infos) = jax.lax.scan(
+    _, (dones, env_states, infos, backward_losses) = jax.lax.scan(
         execute_chunk,
         (rng, obs, env_state, action_chunk, n),
         None,
         length=scan_length,
     )
     dones, env_states, infos = jax.tree.map(lambda x: x.reshape(-1, *x.shape[2:]), (dones, env_states, infos))
+    # backward_losses: (L, B)
+    backward_loss_mean = jnp.mean(backward_losses)
     assert dones.shape[0] >= env_params.max_timesteps, f"{dones.shape=}"
     return_info = {}
     for key in ["returned_episode_returns", "returned_episode_lengths", "returned_episode_solved"]:
         # only consider the first episode of each rollout
         first_done_idx = jnp.argmax(dones, axis=0)
         return_info[key] = infos[key][first_done_idx, jnp.arange(config.num_evals)].mean()
+    # Add continuity metric across chunks (lower is better)
+    return_info["backward_overlap_loss"] = backward_loss_mean
     for key in ["match"]:
         if key in infos:
             return_info[key] = jnp.mean(infos[key])

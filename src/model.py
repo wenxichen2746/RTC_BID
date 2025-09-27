@@ -184,6 +184,7 @@ class FlowPolicy(nnx.Module):
         num_steps: int,
         prev_action_chunk: jax.Array,  # [batch, horizon, action_dim]
         inference_delay: int,
+        execute_horizon: int, # <-- New argument
         prefix_attention_horizon: int,
         n_samples: int,
         # when below two are None, it becomes backwards loss only (i.e., rejection sampling)
@@ -193,9 +194,19 @@ class FlowPolicy(nnx.Module):
         obs = einops.repeat(obs, "b ... -> (n b) ...", n=n_samples)
         weights = get_prefix_weights(inference_delay, prefix_attention_horizon, self.action_chunk_size, "exp")
 
+        # def backward_loss(action_chunks: jax.Array):
+        #     error = jnp.linalg.norm(action_chunks - prev_action_chunk, axis=-1)  # [n, b, h]
+        #     return jnp.sum(error * weights[None, None, :], axis=-1)  # [n, b]
         def backward_loss(action_chunks: jax.Array):
-            error = jnp.linalg.norm(action_chunks - prev_action_chunk, axis=-1)  # [n, b, h]
-            return jnp.sum(error * weights[None, None, :], axis=-1)  # [n, b]
+            # Calculate the length of the valid, non-padded portion of the previous action chunk.
+            valid_horizon = self.action_chunk_size - execute_horizon
+            # Slice the action chunks and weights to only compare the valid, overlapping parts.
+            actions_to_compare = action_chunks[:, :, :valid_horizon]
+            prev_actions_to_compare = prev_action_chunk[None, :, :valid_horizon] # Add sample dim for broadcasting
+            weights_to_apply = weights[None, None, :valid_horizon] 
+            # Compute the error only on the sliced, valid portions.
+            error = jnp.linalg.norm(actions_to_compare - prev_actions_to_compare, axis=-1)  # [n, b, valid_horizon]
+            return jnp.sum(error * weights_to_apply, axis=-1)  # [n, b]
 
         strong_actions = einops.rearrange(self.action(rng, obs, num_steps), "(n b) h d -> n b h d", n=n_samples)
         # Variance across sampled actions captures diversity per chunk; average across action dim -> [b, h]
@@ -584,6 +595,7 @@ class FlowPolicyCFG2(nnx.Module):
         num_steps: int,
         prev_action_chunk: jax.Array,  # [batch, horizon, action_dim]
         inference_delay: int,
+        execute_horizon: int, # <-- New argument
         prefix_attention_horizon: int,
         n_samples: int,
         bid_weak_policy: Self | None = None,
@@ -593,9 +605,19 @@ class FlowPolicyCFG2(nnx.Module):
         obs = einops.repeat(obs, "b ... -> (n b) ...", n=n_samples)
         weights = get_prefix_weights(inference_delay, prefix_attention_horizon, self.action_chunk_size, "exp")
 
+        # def backward_loss(action_chunks: jax.Array):
+        #     error = jnp.linalg.norm(action_chunks - prev_action_chunk, axis=-1)  # [n, b, h]
+        #     return jnp.sum(error * weights[None, None, :], axis=-1)  # [n, b]
         def backward_loss(action_chunks: jax.Array):
-            error = jnp.linalg.norm(action_chunks - prev_action_chunk, axis=-1)  # [n, b, h]
-            return jnp.sum(error * weights[None, None, :], axis=-1)  # [n, b]
+            # Calculate the length of the valid, non-padded portion of the previous action chunk.
+            valid_horizon = self.action_chunk_size - execute_horizon
+            # Slice the action chunks and weights to only compare the valid, overlapping parts.
+            actions_to_compare = action_chunks[:, :, :valid_horizon]
+            prev_actions_to_compare = prev_action_chunk[None, :, :valid_horizon] # Add sample dim for broadcasting
+            weights_to_apply = weights[None, None, :valid_horizon] 
+            # Compute the error only on the sliced, valid portions.
+            error = jnp.linalg.norm(actions_to_compare - prev_actions_to_compare, axis=-1)  # [n, b, valid_horizon]
+            return jnp.sum(error * weights_to_apply, axis=-1)  # [n, b]
 
         strong_actions = einops.rearrange(
             self.action(rng, obs, num_steps, mask_action=mask_action), "(n b) h d -> n b h d", n=n_samples

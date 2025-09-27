@@ -3,6 +3,8 @@
 --level_path: choose a json file
 --run_path: bc policy path, eg: my model is at "real-time-chunking-kinetix/logs-bc/balmy-morning-11/0/policies/worlds_l_hard_lunar_lander.pkl", so my run_path is logs-bc/balmy-morning-11/
 --episode: load bc policy of episode 
+uv run src/rollout_video.py --level_path "worlds/c/ufo.json" 
+
 
 """
 
@@ -27,6 +29,7 @@ import numpy as np
 from train_expert_dr import change_polygon_position
 from train_expert_dr import change_polygon_position_and_velocity
 from cfg_train_expert import RandomizedResetWrapper,ActObsHistoryWrapper
+from util.env_dr import *
 
 class DynamicPolygonDriftWrapper(wrappers.UnderspecifiedEnvWrapper):
     """
@@ -104,8 +107,9 @@ def rollout_and_save_video(level_path, run_path, config=Config(),load=False):
     # base_env = RandomizedResetWrapper(base_env, polygon_index=4)
     # base_env = RandomizedResetWrapper(base_env, polygon_index=8)
     # base_env = RandomizedResetWrapper(base_env, polygon_index=[1,10,11],xy_min=2.5,xy_max=3.5)
-    base_env = RandomizedResetWrapper(base_env, polygon_index=[9,10,11],xy_min=1.5,xy_max=3.5)
+    # base_env = RandomizedResetWrapper(base_env, polygon_index=[9,10,11],xy_min=1.5,xy_max=3.5)
     base_env=ActObsHistoryWrapper(base_env, act_history_length=4, obs_history_length=1)
+    base_env= DR_static_wrapper(base_env,level_path)
     env = train_expert.BatchEnvWrapper(
         wrappers.LogWrapper(
             wrappers.AutoReplayWrapper(train_expert.NoisyActionWrapper(base_env))
@@ -160,7 +164,7 @@ def rollout_and_save_video(level_path, run_path, config=Config(),load=False):
 
     # Setup video frame collection
     frames = []
-    for eps in range(5):
+    for eps in range(10):
         print(f'episode:{eps}')
         t=0
         obs, env_state = env.reset_to_level(key, single_level, env_params)
@@ -186,7 +190,7 @@ def rollout_and_save_video(level_path, run_path, config=Config(),load=False):
             t+=1
             print(f"step{t}")
 
-            if done[0] or t>30:
+            if done[0] or t>10:
                 break
         
 

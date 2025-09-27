@@ -81,6 +81,10 @@ def DR_static_wrapper(env,level_path):
     elif 'toss_bin' in level_path:
         print(f'env: toss_bin, randomizing obstacles&taget location')
         env = RandomizedResetWrapper(env, polygon_index=[9,10,11],xy_min=1.5,xy_max=3.5)
+    elif 'drone' in level_path:
+        print(f'env: drone, randomizing target location')
+        env = RandomizedResetWrapper(env, polygon_index=[4,7])
+        env = RandomizedResetWrapper(env, polygon_index=[8])
     else:
         raise NotImplementedError("*** Level not recognized DR not implemented **")
     return env
