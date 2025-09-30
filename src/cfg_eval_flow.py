@@ -553,41 +553,30 @@ def main(
                         header = not csv_path.exists()
                         df_var.to_csv(csv_path, mode="a", index=False, header=header)
 
-        #BID
-        # c = dataclasses.replace(
-        #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig()
-        # )
-        # eval_and_record(c,"BID_ca",weak_state_dicts=weak_state_dicts)
-
-        # c = dataclasses.replace(
-        #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig(mask_action=True)
-        # )
-        # eval_and_record(c,"BID_un",weak_state_dicts=weak_state_dicts)
-
         
-        cfg_coef=[x for x in range(0, 5)]
-        # cfg_coef=[x for x in range(0, 3)]
-        for w_a in cfg_coef:
-            c = dataclasses.replace(
-                config,
-                inference_delay=inference_delay,
-                execute_horizon=execute_horizon,
-                method=CFGCOS_MethodConfig(w_a=w_a),#u=u(a|o)+ cos_coef*w*(u(a|a',o)-u(a|o))
-            )
-            eval_and_record(c,f"cfg_BF_cos:wa{w_a}")
+        # cfg_coef=[x for x in range(0, 5)]
+        # # cfg_coef=[x for x in range(0, 3)]
+        # for w_a in cfg_coef:
+        #     c = dataclasses.replace(
+        #         config,
+        #         inference_delay=inference_delay,
+        #         execute_horizon=execute_horizon,
+        #         method=CFGCOS_MethodConfig(w_a=w_a),#u=u(a|o)+ cos_coef*w*(u(a|a',o)-u(a|o))
+        #     )
+        #     eval_and_record(c,f"cfg_BF_cos:wa{w_a}")
 
-        #enhance guidance on action
-        for w in cfg_coef+[-1]:
-        #u = w* u(actions,obs) + (1-w)* u(∅,obs)​​  =   u(∅,obs)​​  +  w (u(actions,obs)-u(∅,obs)​​)
-            w_ao=w#w_ao=1+w
-            w_o=1-w#w_o=-w
-            c = dataclasses.replace(
-                config,
-                inference_delay=inference_delay,
-                execute_horizon=execute_horizon,
-                method=CFGMethodConfig(w_1=0.0, w_2=0.0, w_3=w_o,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
-            )
-            eval_and_record(c,f"cfg_BF:wa{w}")
+        # #enhance guidance on action
+        # for w in cfg_coef+[-1]:
+        # #u = w* u(actions,obs) + (1-w)* u(∅,obs)​​  =   u(∅,obs)​​  +  w (u(actions,obs)-u(∅,obs)​​)
+        #     w_ao=w#w_ao=1+w
+        #     w_o=1-w#w_o=-w
+        #     c = dataclasses.replace(
+        #         config,
+        #         inference_delay=inference_delay,
+        #         execute_horizon=execute_horizon,
+        #         method=CFGMethodConfig(w_1=0.0, w_2=0.0, w_3=w_o,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+        #     )
+        #     eval_and_record(c,f"cfg_BF:wa{w}")
         #enhance guidance on obs
         # for w in cfg_coef:
         # #u = w* u(actions,obs) + (1-w)* u(action,∅)​​  =   u(action,∅)​  +  w (u(actions,obs)-u(action,∅))
@@ -625,26 +614,26 @@ def main(
         #         # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
         #     )
         #     eval_and_record(c,f"cfg_BI:wa{w_a}")
-        for w in cfg_coef:
-            c = dataclasses.replace(
-                config,
-                inference_delay=inference_delay,
-                execute_horizon=execute_horizon,
-                method=CFG_BI_COS_MethodConfig(w_o=w, w_a=w),
-                #u = u(∅,∅) + cos*w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
-            )
-            eval_and_record(c,f"cfg_BI_cos:w{w}")
+        # for w in cfg_coef:
+        #     c = dataclasses.replace(
+        #         config,
+        #         inference_delay=inference_delay,
+        #         execute_horizon=execute_horizon,
+        #         method=CFG_BI_COS_MethodConfig(w_o=w, w_a=w),
+        #         #u = u(∅,∅) + cos*w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
+        #     )
+        #     eval_and_record(c,f"cfg_BI_cos:w{w}")
 
-        for w in cfg_coef:
-            w_nn=1-w-w
-            c = dataclasses.replace(
-                config,
-                inference_delay=inference_delay,
-                execute_horizon=execute_horizon,
-                method=CFGMethodConfig(w_1=w_nn, w_2=w, w_3=w, w_4=0.0),
-                # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
-            )
-            eval_and_record(c,f"cfg_BI:w{w}")
+        # for w in cfg_coef:
+        #     w_nn=1-w-w
+        #     c = dataclasses.replace(
+        #         config,
+        #         inference_delay=inference_delay,
+        #         execute_horizon=execute_horizon,
+        #         method=CFGMethodConfig(w_1=w_nn, w_2=w, w_3=w, w_4=0.0),
+        #         # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+        #     )
+        #     eval_and_record(c,f"cfg_BI:w{w}")
 
         #u = 0.5* w_o* u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​ + 0.5*w_a* u(actions,obs) + 0.5*(1-w_a)* u(∅,obs)​​ 
         #u = (0.5 * w_o + 0.5 * w_a ) * u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​   + 0.5*(1-w_a)* u(∅,obs)​​ 
@@ -661,26 +650,37 @@ def main(
         #         )
         #         eval_and_record(c,f"cfg_BF_wo{w_o}_wa{w_a}")
         # naive
-        # c = dataclasses.replace(
-        #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=NaiveMethodConfig()
-        # )
-        # eval_and_record(c,"naive_ca",weak_state_dicts=None)
+        c = dataclasses.replace(
+            config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=NaiveMethodConfig()
+        )
+        eval_and_record(c,"naive_ca",weak_state_dicts=None)
 
+        c = dataclasses.replace(
+            config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=NaiveMethodConfig(mask_action=True)
+        )
+        eval_and_record(c,"naive_un",weak_state_dicts=None)
+
+        #BID
         # c = dataclasses.replace(
-        #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=NaiveMethodConfig(mask_action=True)
+        #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig()
         # )
-        # eval_and_record(c,"naive_un",weak_state_dicts=None)
+        # eval_and_record(c,"BID_ca",weak_state_dicts=weak_state_dicts)
+
+        c = dataclasses.replace(
+            config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig(mask_action=True)
+        )
+        eval_and_record(c,"BID_un",weak_state_dicts=weak_state_dicts)
 
         # #RTC
-        # # c = dataclasses.replace(
-        # #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig()
-        # # )
-        # # eval_and_record(c,"RTC_ca")
-
         # c = dataclasses.replace(
-        #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig(mask_action=True)
+        #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig()
         # )
-        # eval_and_record(c,"RTC_un",weak_state_dicts=None)
+        # eval_and_record(c,"RTC_ca")
+
+        c = dataclasses.replace(
+            config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig(mask_action=True)
+        )
+        eval_and_record(c,"RTC_un",weak_state_dicts=None)
 
 
         # # c = dataclasses.replace(
@@ -691,17 +691,14 @@ def main(
         # # )
         # # eval_and_record(c,"RTC_hard_ca")
 
-        # c = dataclasses.replace(
-        #     config,
-        #     inference_delay=inference_delay,
-        #     execute_horizon=execute_horizon,
-        #     method=RealtimeMethodConfig(prefix_attention_schedule="zeros",mask_action=True),
-        # )
-        # eval_and_record(c,"RTC_hard_un",weak_state_dicts=None)
+        c = dataclasses.replace(
+            config,
+            inference_delay=inference_delay,
+            execute_horizon=execute_horizon,
+            method=RealtimeMethodConfig(prefix_attention_schedule="zeros",mask_action=True),
+        )
+        eval_and_record(c,"RTC_hard_un",weak_state_dicts=None)
 
-
-        #CFG
-        # cfg_coef=[x * 0.5 for x in range(2, 8.1)]
 
 
 

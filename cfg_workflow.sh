@@ -142,7 +142,7 @@
 
 
 # uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_grasp_elavated --level-paths "worlds/c/grasp_elavated.json" --output-dir ./logs-eval-cfg/0908_grasp_elavated_sup
-uv run src/cfg_eval_flow.py --run_path ./logs-bc/0926_drone --level-paths "worlds/c/drone.json" --output-dir ./logs-eval-cfg/0927_drone
-uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_hard_lunar_lander --level-paths "worlds/l/hard_lunar_lander.json" --output-dir ./logs-eval-cfg/0927_hard_lunar_lander_sup
-uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_place_can_easy --level-paths "worlds/c/place_can_easy.json" --output-dir ./logs-eval-cfg/0927_place_can_easy_sup
-uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_toss_bin --level-paths "worlds/c/toss_bin.json" --output-dir ./logs-eval-cfg/0927_toss_bin_sup
+uv run src/cfg_eval_flow.py --run_path ./logs-bc/0926_drone --level-paths "worlds/c/drone.json" --output-dir ./logs-eval-cfg/0930_drone
+uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_hard_lunar_lander --level-paths "worlds/l/hard_lunar_lander.json" --output-dir ./logs-eval-cfg/0930_hard_lunar_lander
+uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_place_can_easy --level-paths "worlds/c/place_can_easy.json" --output-dir ./logs-eval-cfg/0930_place_can_easy
+uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_toss_bin --level-paths "worlds/c/toss_bin.json" --output-dir ./logs-eval-cfg/0930_toss_bin

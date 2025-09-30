@@ -266,8 +266,8 @@ def main(
 
     rngs = jax.random.split(jax.random.key(seed), len(level_paths))
     results = collections.defaultdict(list)
-    # for inference_delay in [0, 1, 2, 3, 4]:
-    for inference_delay in [1]:
+    for inference_delay in [0, 2, 4]:
+    # for inference_delay in [1]:
         for execute_horizon in range(max(1, inference_delay), 8 - inference_delay + 1):
             print(f"{inference_delay=} {execute_horizon=}")
             c = dataclasses.replace(

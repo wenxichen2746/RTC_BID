@@ -45,7 +45,7 @@ for level in "${levels[@]}"; do
   echo "[4/4] Evaluating flow..."
   uv run src/eval_flow.py \
     --run-path "./logs-bc/${name}" \
-    --output-dir "./logs-eval/0927_${name}" \
+    --output-dir "./logs-eval/0930_${name}" \
     --level-paths "$level"
 
   echo "=== Completed pipeline for ${name} ===\n"
