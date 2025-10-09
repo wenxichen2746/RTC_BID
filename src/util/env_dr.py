@@ -71,7 +71,7 @@ def DR_static_wrapper(env,level_path):
         env = RandomizedResetWrapper(env, polygon_index=4)
     elif 'grasp' in level_path:
         print(f'env: grasp, randomizing target location')
-        env = RandomizedResetWrapper(env, polygon_index=10)
+        env = RandomizedResetWrapper(env, polygon_index=10,xy_min=1.8)
     elif 'reach_avoid' in level_path:
         print(f'env: reach&avoid, randomizing obstacles location')
         env = RandomizedResetWrapper(env, polygon_index=7,move_x_or_y='y')
@@ -85,8 +85,18 @@ def DR_static_wrapper(env,level_path):
         print(f'env: drone, randomizing target location')
         env = RandomizedResetWrapper(env, polygon_index=[4,7])
         env = RandomizedResetWrapper(env, polygon_index=[8])
+    elif 'catapult' in level_path:
+        print(f'env: catapult, randomizing target&supports location')
+        env = RandomizedResetWrapper(env, polygon_index=[7,5,6],xy_min=2.5,xy_max=4.5)
+    elif 'insert_key' in level_path:
+        print(f'env: insert_key, randomizing target&supports location')
+        env = RandomizedResetWrapper(env, polygon_index=[4,10,11],xy_min=1,xy_max=4)
+    elif 'whip' in level_path:
+        print(f'env: whip, randomizing targetlocation')
+        env = RandomizedResetWrapper(env, polygon_index=10,xy_min=1,xy_max=4)
     else:
-        raise NotImplementedError("*** Level not recognized DR not implemented **")
+        print(f'no env DR implemented')
+        # raise NotImplementedError("*** Level not recognized DR not implemented **")
     return env
 
 

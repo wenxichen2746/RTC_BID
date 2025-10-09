@@ -178,6 +178,13 @@ def eval(
             return jnp.mean(diff, axis=-1)  # (B,)
         backward_loss_per_env = _overlap_loss(action_chunk, next_action_chunk)
 
+        # Cross-chunk distance at the inference boundary
+        delay_idx = config.inference_delay if config.inference_delay > 0 else 0
+        delay_idx = min(delay_idx, action_chunk.shape[1] - 1)
+        prev_boundary_action = action_chunk[:, delay_idx, :]
+        next_boundary_action = next_action_chunk[:, delay_idx, :]
+        cross_chunk_distance_per_env = jnp.linalg.norm(next_boundary_action - prev_boundary_action, axis=-1)
+
         # Execute actions
         action_chunk_to_execute = jnp.concatenate(
             [ action_chunk[:, : config.inference_delay],
@@ -198,7 +205,7 @@ def eval(
         # Return cos_hist_this per outer iteration (B, S)
         return (
             rng, next_obs, next_env_state, next_action_chunk, next_n
-        ), (dones, env_states, infos, cos_hist_this, action_var_this, backward_loss_per_env)
+        ), (dones, env_states, infos, cos_hist_this, action_var_this, backward_loss_per_env, cross_chunk_distance_per_env)
 
     rng, key = jax.random.split(rng)
     obs, env_state = env.reset_to_level(key, level, env_params)
@@ -208,7 +215,7 @@ def eval(
     n = jnp.ones(action_chunk.shape[1], dtype=jnp.int32)
 
     scan_length = math.ceil(env_params.max_timesteps / config.execute_horizon)
-    _, (dones, env_states, infos, cos_hist_iters, action_var_iters, backward_losses) = jax.lax.scan(
+    _, (dones, env_states, infos, cos_hist_iters, action_var_iters, backward_losses, cross_chunk_distances) = jax.lax.scan(
         execute_chunk,
         (rng, obs, env_state, action_chunk, n),
         None,
@@ -289,6 +296,11 @@ def eval(
     # Backward-overlap loss across all outer steps and envs (lower is better)
     # backward_losses: (L, B)
     return_info["backward_overlap_loss"] = jnp.nanmean(backward_losses)
+    return_info["backward_overlap_loss_std"] = jnp.nanstd(backward_losses)
+
+    # Cross-chunk action distance at inference boundary
+    return_info["cross_chunk_distance_mean"] = jnp.nanmean(cross_chunk_distances)
+    return_info["cross_chunk_distance_std"] = jnp.nanstd(cross_chunk_distances)
 
     # Cosine artifacts: keep raw per-chunk; aggregate without masking
     cos_step_mean = jnp.nanmean(cos_hist_iters, axis=(0, 1))  # (S,)
@@ -476,7 +488,11 @@ def main(
             levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4)
             levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=7)
         else:
-            raise NotImplementedError("*** Level not recognized DR not implemented **")
+            if vel_target!=0.0:
+                print(f'skipping moving target for {level_paths[0]}')
+                return
+            
+            #raise NotImplementedError("*** Level not recognized DR not implemented **")
         if vel_target==0.0:
             env=DR_static_wrapper(env,level_paths[0])
 
@@ -554,29 +570,29 @@ def main(
                         df_var.to_csv(csv_path, mode="a", index=False, header=header)
 
         
-        # cfg_coef=[x for x in range(0, 5)]
-        # # cfg_coef=[x for x in range(0, 3)]
-        # for w_a in cfg_coef:
-        #     c = dataclasses.replace(
-        #         config,
-        #         inference_delay=inference_delay,
-        #         execute_horizon=execute_horizon,
-        #         method=CFGCOS_MethodConfig(w_a=w_a),#u=u(a|o)+ cos_coef*w*(u(a|a',o)-u(a|o))
-        #     )
-        #     eval_and_record(c,f"cfg_BF_cos:wa{w_a}")
+        cfg_coef=[x for x in range(1, 5)]
+        # cfg_coef=[x for x in range(0, 3)]
+        for w_a in cfg_coef:
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFGCOS_MethodConfig(w_a=w_a),#u=u(a|o)+ cos_coef*w*(u(a|a',o)-u(a|o))
+            )
+            eval_and_record(c,f"cfg_BF_cos:wa{w_a}")
 
-        # #enhance guidance on action
-        # for w in cfg_coef+[-1]:
-        # #u = w* u(actions,obs) + (1-w)* u(∅,obs)​​  =   u(∅,obs)​​  +  w (u(actions,obs)-u(∅,obs)​​)
-        #     w_ao=w#w_ao=1+w
-        #     w_o=1-w#w_o=-w
-        #     c = dataclasses.replace(
-        #         config,
-        #         inference_delay=inference_delay,
-        #         execute_horizon=execute_horizon,
-        #         method=CFGMethodConfig(w_1=0.0, w_2=0.0, w_3=w_o,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
-        #     )
-        #     eval_and_record(c,f"cfg_BF:wa{w}")
+        #enhance guidance on action
+        for w in cfg_coef+[0,-1]:
+        #u = w* u(actions,obs) + (1-w)* u(∅,obs)​​  =   u(∅,obs)​​  +  w (u(actions,obs)-u(∅,obs)​​)
+            w_ao=w#w_ao=1+w
+            w_o=1-w#w_o=-w
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFGMethodConfig(w_1=0.0, w_2=0.0, w_3=w_o,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+            )
+            eval_and_record(c,f"cfg_BF:wa{w}")
         #enhance guidance on obs
         # for w in cfg_coef:
         # #u = w* u(actions,obs) + (1-w)* u(action,∅)​​  =   u(action,∅)​  +  w (u(actions,obs)-u(action,∅))
@@ -614,26 +630,27 @@ def main(
         #         # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
         #     )
         #     eval_and_record(c,f"cfg_BI:wa{w_a}")
-        # for w in cfg_coef:
-        #     c = dataclasses.replace(
-        #         config,
-        #         inference_delay=inference_delay,
-        #         execute_horizon=execute_horizon,
-        #         method=CFG_BI_COS_MethodConfig(w_o=w, w_a=w),
-        #         #u = u(∅,∅) + cos*w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
-        #     )
-        #     eval_and_record(c,f"cfg_BI_cos:w{w}")
 
-        # for w in cfg_coef:
-        #     w_nn=1-w-w
-        #     c = dataclasses.replace(
-        #         config,
-        #         inference_delay=inference_delay,
-        #         execute_horizon=execute_horizon,
-        #         method=CFGMethodConfig(w_1=w_nn, w_2=w, w_3=w, w_4=0.0),
-        #         # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
-        #     )
-        #     eval_and_record(c,f"cfg_BI:w{w}")
+        for w in cfg_coef:
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFG_BI_COS_MethodConfig(w_o=w, w_a=w),
+                #u = u(∅,∅) + cos*w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
+            )
+            eval_and_record(c,f"cfg_BI_cos:w{w}")
+
+        for w in cfg_coef:
+            w_nn=1-w-w
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFGMethodConfig(w_1=w_nn, w_2=w, w_3=w, w_4=0.0),
+                # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+            )
+            eval_and_record(c,f"cfg_BI:w{w}")
 
         #u = 0.5* w_o* u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​ + 0.5*w_a* u(actions,obs) + 0.5*(1-w_a)* u(∅,obs)​​ 
         #u = (0.5 * w_o + 0.5 * w_a ) * u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​   + 0.5*(1-w_a)* u(∅,obs)​​ 

@@ -142,7 +142,55 @@
 
 
 # uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_grasp_elavated --level-paths "worlds/c/grasp_elavated.json" --output-dir ./logs-eval-cfg/0908_grasp_elavated_sup
-uv run src/cfg_eval_flow.py --run_path ./logs-bc/0926_drone --level-paths "worlds/c/drone.json" --output-dir ./logs-eval-cfg/0930_drone
-uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_hard_lunar_lander --level-paths "worlds/l/hard_lunar_lander.json" --output-dir ./logs-eval-cfg/0930_hard_lunar_lander
-uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_place_can_easy --level-paths "worlds/c/place_can_easy.json" --output-dir ./logs-eval-cfg/0930_place_can_easy
-uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_toss_bin --level-paths "worlds/c/toss_bin.json" --output-dir ./logs-eval-cfg/0930_toss_bin
+# uv run src/cfg_eval_flow.py --run_path ./logs-bc/0926_drone --level-paths "worlds/c/drone.json" --output-dir ./logs-eval-cfg/0930_drone
+# uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_hard_lunar_lander --level-paths "worlds/l/hard_lunar_lander.json" --output-dir ./logs-eval-cfg/0930_hard_lunar_lander
+# uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_place_can_easy --level-paths "worlds/c/place_can_easy.json" --output-dir ./logs-eval-cfg/0930_place_can_easy
+# uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_toss_bin --level-paths "worlds/c/toss_bin.json" --output-dir ./logs-eval-cfg/0930_toss_bin
+
+# -------- 1001 batch pipelines --------
+# set -euo pipefail
+
+ENV_BATCH_1001=(
+  "grasp_easy worlds/l/grasp_easy.json"
+  "chain_lander worlds/l/chain_lander.json"
+  "car_launch worlds/l/car_launch.json"
+  "trampoline worlds/l/trampoline.json"
+  "insert_key worlds/c/insert_key.json"
+# #   "whip worlds/c/whip.json"
+  "catapult worlds/l/catapult.json"
+)
+
+# echo "===== Step 1: Train experts (1001 batch) ====="
+# for entry in "${ENV_BATCH_1001[@]}"; do
+#   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+#   RUN_NAME="1001_${ENV_NAME}_diversereward"
+#   echo "--- [Step 1] ${RUN_NAME}"
+#   uv run src/cfg_train_expert.py     --config.level-paths "${LEVEL_PATH}"     --config.wandb_name "${RUN_NAME}"
+# done
+
+# echo "
+# ===== Step 2: Generate domain-randomized data (1001 batch) ====="
+# for entry in "${ENV_BATCH_1001[@]}"; do
+#   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+#   RUN_NAME="1001_${ENV_NAME}_diversereward"
+#   echo "--- [Step 2] ${RUN_NAME}"
+#   uv run src/cfg_generate_data_dr.py     --config.run-path "./logs-expert/${RUN_NAME}"     --config.level-path "${LEVEL_PATH}"
+# done
+
+# echo "
+# ===== Step 3: Train flows (1001 batch) ====="
+# for entry in "${ENV_BATCH_1001[@]}"; do
+#   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+#   RUN_NAME="1001_${ENV_NAME}_diversereward"
+#   echo "--- [Step 3] ${RUN_NAME}"
+#   uv run src/cfg_train_flow.py     --config.run-path "./logs-expert/${RUN_NAME}"     --config.level-paths "${LEVEL_PATH}"     --config.wandb_name "${RUN_NAME}"
+# done
+
+echo "
+===== Step 4: Evaluate flows (1001 batch) ====="
+for entry in "${ENV_BATCH_1001[@]}"; do
+  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+  RUN_NAME="1001_${ENV_NAME}_diversereward"
+  echo "--- [Step 4] ${RUN_NAME}"
+  uv run src/cfg_eval_flow.py     --run_path "./logs-bc/${RUN_NAME}"     --level-paths "${LEVEL_PATH}"     --output-dir "./logs-eval-cfg/${RUN_NAME}"
+done
