@@ -89,10 +89,10 @@ def eval(
     env: kenv.environment.Environment,
     rng: jax.Array,
     level: kenv_state.EnvState,
-    policy: _model.FlowPolicy | _model.FlowPolicyCFG2,
+    policy:  _model.FlowPolicyCFG2,
     env_params: kenv_state.EnvParams,
     static_env_params: kenv_state.EnvParams,
-    weak_policy: _model.FlowPolicy | _model.FlowPolicyCFG2 | None = None,
+    weak_policy:  _model.FlowPolicyCFG2 | None = None,
     noise_std: float =0.0,
 ):
     env = train_expert.BatchEnvWrapper(

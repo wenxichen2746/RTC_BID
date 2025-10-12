@@ -67,6 +67,7 @@ class CFG_BI_COS_MethodConfig:
     #u = u(∅,∅) + cos*w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
     w_a: float = 1.0
     w_o: float = 1.0
+    weight_schedule: bool = False
 
 @dataclasses.dataclass(frozen=True)
 class EvalConfig:
@@ -89,10 +90,10 @@ def eval(
     env: kenv.environment.Environment,
     rng: jax.Array,
     level: kenv_state.EnvState,
-    policy: _model.FlowPolicy | _model.FlowPolicyCFG2,
+    policy:  _model.FlowPolicyCFG2,
     env_params: kenv_state.EnvParams,
     static_env_params: kenv_state.EnvParams,
-    weak_policy: _model.FlowPolicy | _model.FlowPolicyCFG2 | None = None,
+    weak_policy:  _model.FlowPolicyCFG2 | None = None,
     noise_std: float =0.0,
 ):
     env = train_expert.BatchEnvWrapper(
@@ -160,7 +161,8 @@ def eval(
         elif isinstance(config.method, CFG_BI_COS_MethodConfig):
             # NOTE: your action_cfg_cos returns (x_1, cos_history) with cos_history shape (num_steps, B)
             next_action_chunk, cos_hist = policy.action_cfg_BI_cos(
-                key, obs, config.num_flow_steps,w_o=config.method.w_o, w_a=config.method.w_a
+                key, obs, config.num_flow_steps,
+                w_o=config.method.w_o, w_a=config.method.w_a, weight_schedule=config.method.weight_schedule
             )
             cos_hist_this = jnp.transpose(cos_hist, (1, 0))  # -> (B, S)
         else:
@@ -641,6 +643,16 @@ def main(
                 #u = u(∅,∅) + cos*w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
             )
             eval_and_record(c,f"cfg_BI_cos:w{w}")
+
+        for w in cfg_coef:
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFG_BI_COS_MethodConfig(w_o=w, w_a=w, weight_schedule=True),
+                #u = u(∅,∅) + cos*w_a * [u(actions,∅)-u(∅,∅)] + w_o * [u(∅,obs)-u(∅,∅) ]​​​
+            )
+            eval_and_record(c,f"cfg_BI_cos_schedule:w{w}")
 
         for w in cfg_coef:
             w_nn=1-w-w
