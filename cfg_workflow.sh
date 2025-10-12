@@ -150,15 +150,15 @@
 # -------- 1001 batch pipelines --------
 # set -euo pipefail
 
-ENV_BATCH_1001=(
-  "grasp_easy worlds/l/grasp_easy.json"
-  "chain_lander worlds/l/chain_lander.json"
-  "car_launch worlds/l/car_launch.json"
-  "trampoline worlds/l/trampoline.json"
-  "insert_key worlds/c/insert_key.json"
-# #   "whip worlds/c/whip.json"
-  "catapult worlds/l/catapult.json"
-)
+# ENV_BATCH_1001=(
+#   "grasp_easy worlds/l/grasp_easy.json"
+#   # "chain_lander worlds/l/chain_lander.json"
+#   # "car_launch worlds/l/car_launch.json"
+#   # "trampoline worlds/l/trampoline.json"
+#   # "insert_key worlds/c/insert_key.json"
+# # #   "whip worlds/c/whip.json"
+#   "catapult worlds/l/catapult.json"
+# )
 
 # echo "===== Step 1: Train experts (1001 batch) ====="
 # for entry in "${ENV_BATCH_1001[@]}"; do
@@ -186,11 +186,21 @@ ENV_BATCH_1001=(
 #   uv run src/cfg_train_flow.py     --config.run-path "./logs-expert/${RUN_NAME}"     --config.level-paths "${LEVEL_PATH}"     --config.wandb_name "${RUN_NAME}"
 # done
 
-echo "
-===== Step 4: Evaluate flows (1001 batch) ====="
-for entry in "${ENV_BATCH_1001[@]}"; do
-  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-  RUN_NAME="1001_${ENV_NAME}_diversereward"
-  echo "--- [Step 4] ${RUN_NAME}"
-  uv run src/cfg_eval_flow.py     --run_path "./logs-bc/${RUN_NAME}"     --level-paths "${LEVEL_PATH}"     --output-dir "./logs-eval-cfg/${RUN_NAME}"
-done
+# echo "
+# ===== Step 4: Evaluate flows (1001 batch) ====="
+# for entry in "${ENV_BATCH_1001[@]}"; do
+#   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+#   RUN_NAME="1001_${ENV_NAME}_diversereward"
+#   echo "--- [Step 4] ${RUN_NAME}"
+#   uv run src/cfg_eval_flow.py     --run_path "./logs-bc/${RUN_NAME}"     --level-paths "${LEVEL_PATH}"     --output-dir "./logs-eval-cfg/${RUN_NAME}"
+# done
+# uv run src/cfg_eval_flow.py     --run_path "./logs-bc/${RUN_NAME}"     --level-paths "${LEVEL_PATH}"     --output-dir "./logs-eval-cfg/${RUN_NAME}"
+
+uv run src/cfg_eval_flow.py --run_path ./logs-bc/run1009 --level-paths "worlds/l/catapult.json" "worlds/c/place_can_easy.json" "worlds/c/toss_bin.json" "worlds/l/grasp_easy.json" --output-dir ./logs-eval-cfg/1009_4envs
+
+
+uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/0908_place_can_easy --level-paths "worlds/c/place_can_easy.json" --output-dir ./logs-eval-cfg/1009_place_can_easy
+uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/0908_toss_bin --level-paths "worlds/c/toss_bin.json" --output-dir ./logs-eval-cfg/1009_toss_bin
+uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/1009_grasp_easy_diversereward --level-paths "worlds/l/grasp_easy.json" --output-dir ./logs-eval-cfg/1009_grasp_easy
+uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/1009_catapult_diversereward --level-paths "worlds/l/catapult.json" --output-dir ./logs-eval-cfg/1009_catapult
+

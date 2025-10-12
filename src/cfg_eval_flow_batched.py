@@ -4,6 +4,7 @@ uv run src/eval_flow_single.py --run_path ./logs-bc/snowy-sky-20/ --output-dir .
 '''
 
 import collections
+import concurrent.futures
 import dataclasses
 import functools
 import math
@@ -72,8 +73,8 @@ class CFG_BI_COS_MethodConfig:
 class EvalConfig:
     step: int = -1
     weak_step: int = 5 #| None = None
-    num_evals: int = 2048
-    num_evals_per_env: int = 500
+    num_evals: int = 8192
+    num_evals_per_env: int = 512
     num_flow_steps: int = 5
 
     inference_delay: int = 0
@@ -488,6 +489,11 @@ def main(
             # print(f'training grasp, randomizing target location')
             levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4)
             levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=7)
+        elif 'catapult' in level_paths[0]:
+            # print(f'training grasp, randomizing target location')
+            levels = change_polygon_position_and_velocity(levels, pos_x=2.47,vel_x=vel_target, index=5)
+            levels = change_polygon_position_and_velocity(levels, pos_x=2.73,vel_x=vel_target, index=6)
+            levels = change_polygon_position_and_velocity(levels, pos_x=2.97,vel_x=vel_target, index=7)
         else:
             if vel_target!=0.0:
                 print(f'skipping moving target for {level_paths[0]}')
@@ -574,16 +580,26 @@ def main(
                     df_var.to_csv(csv_path, mode="a", index=False, header=header)
 
         def run_method_batch(batch):
-            handles = []
-            for cfg, method_name, weak_state in batch:
+            if not batch:
+                return
+
+            def _run_single(cfg, weak_state):
                 per_env = max(1, cfg.num_evals_per_env)
                 per_env = min(per_env, cfg.num_evals)
                 cfg_for_eval = dataclasses.replace(cfg, num_evals=per_env)
-                handles.append((method_name, _eval(cfg_for_eval, rngs, levels, state_dicts, weak_state)))
+                eval_info, _, artifacts = _eval(cfg_for_eval, rngs, levels, state_dicts, weak_state)
+                eval_info, artifacts = jax.device_get((eval_info, artifacts))
+                return eval_info, artifacts
 
-            host_outputs = [jax.device_get(handle) for _, handle in handles]
-            for (method_name, _), (out, _, artifacts) in zip(handles, host_outputs):
-                record_outputs(method_name, out, artifacts)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(batch)) as pool:
+                futures = {
+                    pool.submit(_run_single, cfg, weak_state): method_name
+                    for cfg, method_name, weak_state in batch
+                }
+                for future in concurrent.futures.as_completed(futures):
+                    method_name = futures[future]
+                    eval_info, artifacts = future.result()
+                    record_outputs(method_name, eval_info, artifacts)
 
         def flush_queue(force=False):
             target = methods_per_batch if not force else 1
@@ -597,29 +613,29 @@ def main(
             flush_queue()
 
         
-        cfg_coef=[x for x in range(1, 5)]
-        # cfg_coef=[x for x in range(0, 3)]
-        for w_a in cfg_coef:
-            c = dataclasses.replace(
-                config,
-                inference_delay=inference_delay,
-                execute_horizon=execute_horizon,
-                method=CFGCOS_MethodConfig(w_a=w_a),#u=u(a|o)+ cos_coef*w*(u(a|a',o)-u(a|o))
-            )
-            eval_and_record(c,f"cfg_BF_cos:wa{w_a}")
+        cfg_coef=list(np.arange(1, 5.5, 0.5))
+        # # cfg_coef=[x for x in range(0, 3)]
+        # for w_a in cfg_coef:
+        #     c = dataclasses.replace(
+        #         config,
+        #         inference_delay=inference_delay,
+        #         execute_horizon=execute_horizon,
+        #         method=CFGCOS_MethodConfig(w_a=w_a),#u=u(a|o)+ cos_coef*w*(u(a|a',o)-u(a|o))
+        #     )
+        #     eval_and_record(c,f"cfg_BF_cos:wa{w_a}")
 
-        #enhance guidance on action
-        for w in cfg_coef+[0,-1]:
-        #u = w* u(actions,obs) + (1-w)* u(∅,obs)​​  =   u(∅,obs)​​  +  w (u(actions,obs)-u(∅,obs)​​)
-            w_ao=w#w_ao=1+w
-            w_o=1-w#w_o=-w
-            c = dataclasses.replace(
-                config,
-                inference_delay=inference_delay,
-                execute_horizon=execute_horizon,
-                method=CFGMethodConfig(w_1=0.0, w_2=0.0, w_3=w_o,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
-            )
-            eval_and_record(c,f"cfg_BF:wa{w}")
+        # #enhance guidance on action
+        # for w in cfg_coef+[0,-1]:
+        # #u = w* u(actions,obs) + (1-w)* u(∅,obs)​​  =   u(∅,obs)​​  +  w (u(actions,obs)-u(∅,obs)​​)
+        #     w_ao=w#w_ao=1+w
+        #     w_o=1-w#w_o=-w
+        #     c = dataclasses.replace(
+        #         config,
+        #         inference_delay=inference_delay,
+        #         execute_horizon=execute_horizon,
+        #         method=CFGMethodConfig(w_1=0.0, w_2=0.0, w_3=w_o,w_4=w_ao),# u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+        #     )
+        #     eval_and_record(c,f"cfg_BF:wa{w}")
         #enhance guidance on obs
         # for w in cfg_coef:
         # #u = w* u(actions,obs) + (1-w)* u(action,∅)​​  =   u(action,∅)​  +  w (u(actions,obs)-u(action,∅))
@@ -679,6 +695,27 @@ def main(
             )
             eval_and_record(c,f"cfg_BI:w{w}")
 
+        for w in cfg_coef:
+            w_nn=1-w-1
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFGMethodConfig(w_1=w_nn, w_2=1, w_3=w, w_4=0.0),
+                # u = (1-w2-w3) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+            )
+            eval_and_record(c,f"cfg_BI:wo{w}")
+
+        for w in cfg_coef:
+            w_nn=1-w-1
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFGMethodConfig(w_1=w_nn, w_2=w, w_3=1, w_4=0.0),
+                # u = (1-w2-w3) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+            )
+            eval_and_record(c,f"cfg_BI:wa{w}")
         #u = 0.5* w_o* u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​ + 0.5*w_a* u(actions,obs) + 0.5*(1-w_a)* u(∅,obs)​​ 
         #u = (0.5 * w_o + 0.5 * w_a ) * u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​   + 0.5*(1-w_a)* u(∅,obs)​​ 
         # for w_o in [2,3]:
@@ -755,14 +792,14 @@ def main(
     tasks = []
     inference_delay = 1
     # extra horizons at fixed vel/noise
-    for execute_horizon in [2, 3, 4, 5, 6, 7]:
+    for execute_horizon in [2, 4, 6]:
         tasks.append({
             "execute_horizon": execute_horizon,
             "vel_target": 0.0,
             "noise_std": 0.1,
             "label": f"extra_horizon"
         })
-    for execute_horizon in [1, 8]:
+    for execute_horizon in [1,3,5,7]:
         # velocity sweeps
         for vel_target in [0.4, 0.8, 1.2]:
         # for vel_target in [0.7, 1.3]:

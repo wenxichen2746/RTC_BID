@@ -72,7 +72,7 @@ class CFG_BI_COS_MethodConfig:
 class EvalConfig:
     step: int = -1
     weak_step: int = 5 #| None = None
-    num_evals: int = 2048
+    num_evals: int = 2048 #2048
     num_flow_steps: int = 5
 
     inference_delay: int = 0
@@ -468,33 +468,33 @@ def main(
             )
             return eval_info, video, artifacts
         
-        if 'hard_lunar_lander' in level_paths[0]:   
-            # print(f'training LL, target moving at vel{vel_target}')
-            levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4) #change to vel_y=something here if needed
-        elif 'grasp' in level_paths[0]:
-            # print(f'training grasp, randomizing target location')
-            levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=10)
-        elif 'toss_bin' in level_paths[0]:
-            # print(f'training grasp, randomizing target location')
-            levels = change_polygon_position_and_velocity(levels, pos_x=None,vel_x=vel_target, index=9)
-            levels = change_polygon_position_and_velocity(levels, pos_x=None,vel_x=vel_target, index=10)
-            levels = change_polygon_position_and_velocity(levels, pos_x=None,vel_x=vel_target, index=11)
-        elif 'place_can_easy' in level_paths[0]:
-            # print(f'training grasp, randomizing target location')
-            levels = change_polygon_position_and_velocity(levels, pos_x=2,vel_x=vel_target, index=9)
-            levels = change_polygon_position_and_velocity(levels, pos_x=2.5,vel_x=vel_target, index=10)
-        elif 'drone' in level_paths[0]:
-            # print(f'training grasp, randomizing target location')
-            levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4)
-            levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=7)
-        else:
-            if vel_target!=0.0:
-                print(f'skipping moving target for {level_paths[0]}')
-                return
+        # if 'hard_lunar_lander' in level_paths[0]:   
+        #     # print(f'training LL, target moving at vel{vel_target}')
+        #     levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4) #change to vel_y=something here if needed
+        # elif 'grasp' in level_paths[0]:
+        #     # print(f'training grasp, randomizing target location')
+        #     levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=10)
+        # elif 'toss_bin' in level_paths[0]:
+        #     # print(f'training grasp, randomizing target location')
+        #     levels = change_polygon_position_and_velocity(levels, pos_x=None,vel_x=vel_target, index=9)
+        #     levels = change_polygon_position_and_velocity(levels, pos_x=None,vel_x=vel_target, index=10)
+        #     levels = change_polygon_position_and_velocity(levels, pos_x=None,vel_x=vel_target, index=11)
+        # elif 'place_can_easy' in level_paths[0]:
+        #     # print(f'training grasp, randomizing target location')
+        #     levels = change_polygon_position_and_velocity(levels, pos_x=2,vel_x=vel_target, index=9)
+        #     levels = change_polygon_position_and_velocity(levels, pos_x=2.5,vel_x=vel_target, index=10)
+        # elif 'drone' in level_paths[0]:
+        #     # print(f'training grasp, randomizing target location')
+        #     levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4)
+        #     levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=7)
+        # else:
+        #     if vel_target!=0.0:
+        #         print(f'skipping moving target for {level_paths[0]}')
+        #         return
             
-            #raise NotImplementedError("*** Level not recognized DR not implemented **")
-        if vel_target==0.0:
-            env=DR_static_wrapper(env,level_paths[0])
+        #     #raise NotImplementedError("*** Level not recognized DR not implemented **")
+        # if vel_target==0.0:
+        #     env=DR_static_wrapper(env,level_paths[0])
 
         def eval_and_record(c,method_name,weak_state_dicts=None):
             out, _, artifacts = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))
@@ -570,16 +570,17 @@ def main(
                         df_var.to_csv(csv_path, mode="a", index=False, header=header)
 
         
-        cfg_coef=[x for x in range(1, 5)]
+        # cfg_coef=[x for x in range(1, 5)]
+        cfg_coef=list(np.arange(1, 5.5, 0.5))
         # cfg_coef=[x for x in range(0, 3)]
-        for w_a in cfg_coef:
-            c = dataclasses.replace(
-                config,
-                inference_delay=inference_delay,
-                execute_horizon=execute_horizon,
-                method=CFGCOS_MethodConfig(w_a=w_a),#u=u(a|o)+ cos_coef*w*(u(a|a',o)-u(a|o))
-            )
-            eval_and_record(c,f"cfg_BF_cos:wa{w_a}")
+        # for w_a in cfg_coef:
+        #     c = dataclasses.replace(
+        #         config,
+        #         inference_delay=inference_delay,
+        #         execute_horizon=execute_horizon,
+        #         method=CFGCOS_MethodConfig(w_a=w_a),#u=u(a|o)+ cos_coef*w*(u(a|a',o)-u(a|o))
+        #     )
+        #     eval_and_record(c,f"cfg_BF_cos:wa{w_a}")
 
         #enhance guidance on action
         for w in cfg_coef+[0,-1]:
@@ -652,6 +653,28 @@ def main(
             )
             eval_and_record(c,f"cfg_BI:w{w}")
 
+        for w in cfg_coef:
+            w_nn=1-w-1
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFGMethodConfig(w_1=w_nn, w_2=1, w_3=w, w_4=0.0),
+                # u = (1-w2-w3) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+            )
+            eval_and_record(c,f"cfg_BI:wo{w}")
+
+        for w in cfg_coef:
+            w_nn=1-w-1
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFGMethodConfig(w_1=w_nn, w_2=w, w_3=1, w_4=0.0),
+                # u = (1-w2-w3) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+            )
+            eval_and_record(c,f"cfg_BI:wa{w}")
+
         #u = 0.5* w_o* u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​ + 0.5*w_a* u(actions,obs) + 0.5*(1-w_a)* u(∅,obs)​​ 
         #u = (0.5 * w_o + 0.5 * w_a ) * u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​   + 0.5*(1-w_a)* u(∅,obs)​​ 
         # for w_o in [2,3]:
@@ -677,22 +700,22 @@ def main(
         )
         eval_and_record(c,"naive_un",weak_state_dicts=None)
 
-        #BID
-        # c = dataclasses.replace(
-        #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig()
-        # )
-        # eval_and_record(c,"BID_ca",weak_state_dicts=weak_state_dicts)
+        # BID
+        c = dataclasses.replace(
+            config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig()
+        )
+        eval_and_record(c,"BID_ca",weak_state_dicts=weak_state_dicts)
 
         c = dataclasses.replace(
             config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig(mask_action=True)
         )
         eval_and_record(c,"BID_un",weak_state_dicts=weak_state_dicts)
 
-        # #RTC
-        # c = dataclasses.replace(
-        #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig()
-        # )
-        # eval_and_record(c,"RTC_ca")
+        #RTC
+        c = dataclasses.replace(
+            config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig()
+        )
+        eval_and_record(c,"RTC_ca")
 
         c = dataclasses.replace(
             config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig(mask_action=True)
@@ -700,13 +723,13 @@ def main(
         eval_and_record(c,"RTC_un",weak_state_dicts=None)
 
 
-        # # c = dataclasses.replace(
-        # #     config,
-        # #     inference_delay=inference_delay,
-        # #     execute_horizon=execute_horizon,
-        # #     method=RealtimeMethodConfig(prefix_attention_schedule="zeros"),
-        # # )
-        # # eval_and_record(c,"RTC_hard_ca")
+        c = dataclasses.replace(
+            config,
+            inference_delay=inference_delay,
+            execute_horizon=execute_horizon,
+            method=RealtimeMethodConfig(prefix_attention_schedule="zeros"),
+        )
+        eval_and_record(c,"RTC_hard_ca")
 
         c = dataclasses.replace(
             config,
@@ -726,25 +749,25 @@ def main(
     tasks = []
     inference_delay = 1
     # extra horizons at fixed vel/noise
-    for execute_horizon in [2, 3, 4, 5, 6, 7]:
+    for execute_horizon in [2, 4, 6, 8]:
         tasks.append({
             "execute_horizon": execute_horizon,
             "vel_target": 0.0,
             "noise_std": 0.1,
             "label": f"extra_horizon"
         })
-    for execute_horizon in [1, 8]:
+    for execute_horizon in [1,3,5,7]:
         # velocity sweeps
-        for vel_target in [0.4, 0.8, 1.2]:
-        # for vel_target in [0.7, 1.3]:
-            tasks.append({
-                "execute_horizon": execute_horizon,
-                "vel_target": vel_target,
-                "noise_std": 0.1,
-                "label": f"vel_target={vel_target:.2f}"
-            })
+        # for vel_target in [0.4, 0.8, 1.2]:
+        # # for vel_target in [0.7, 1.3]:
+        #     tasks.append({
+        #         "execute_horizon": execute_horizon,
+        #         "vel_target": vel_target,
+        #         "noise_std": 0.1,
+        #         "label": f"vel_target={vel_target:.2f}"
+        #     })
         # noise sweeps at static target
-        for noisestd in [ 0.1, 0.2, 0.4]:
+        for noisestd in [ 0.1, 0.2, 0.3, 0.4]:
         # for noisestd in [0.00, 0.4]:
             tasks.append({
                 "execute_horizon": execute_horizon,

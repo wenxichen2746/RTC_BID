@@ -72,7 +72,7 @@ class CFG_BI_COS_MethodConfig:
 class EvalConfig:
     step: int = -1
     weak_step: int = 5 #| None = None
-    num_evals: int = 2048
+    num_evals: int = 1028 #2048
     num_flow_steps: int = 5
 
     inference_delay: int = 0
@@ -135,7 +135,8 @@ def eval(
             prefix_attention_horizon = policy.action_chunk_size - config.execute_horizon
             next_action_chunk, action_var = policy.bid_action(
                 key, obs, config.num_flow_steps, action_chunk,
-                config.inference_delay, prefix_attention_horizon,
+                config.inference_delay, config.execute_horizon , #<- passing execute_horizon to compare valid overlapping loss
+                prefix_attention_horizon,
                 config.method.n_samples,
                 bid_k=config.method.bid_k,
                 bid_weak_policy=weak_policy if config.method.bid_k is not None else None,
@@ -165,6 +166,25 @@ def eval(
         else:
             raise ValueError(f"Unknown method: {config.method}")
 
+        # Compute overlap continuity loss between previous and new chunks over the valid horizon
+        valid_horizon = max(0, policy.action_chunk_size - config.execute_horizon)
+        def _overlap_loss(prev_chunk, new_chunk):
+            # Compare head of carried previous chunk to head of new chunk
+            prev_overlap = prev_chunk[:, :valid_horizon, :]
+            new_overlap = new_chunk[:, :valid_horizon, :]
+            if valid_horizon == 0:
+                return jnp.zeros(prev_chunk.shape[0])
+            diff = jnp.linalg.norm(new_overlap - prev_overlap, axis=-1)  # (B, valid)
+            return jnp.mean(diff, axis=-1)  # (B,)
+        backward_loss_per_env = _overlap_loss(action_chunk, next_action_chunk)
+
+        # Cross-chunk distance at the inference boundary
+        delay_idx = config.inference_delay if config.inference_delay > 0 else 0
+        delay_idx = min(delay_idx, action_chunk.shape[1] - 1)
+        prev_boundary_action = action_chunk[:, delay_idx, :]
+        next_boundary_action = next_action_chunk[:, delay_idx, :]
+        cross_chunk_distance_per_env = jnp.linalg.norm(next_boundary_action - prev_boundary_action, axis=-1)
+
         # Execute actions
         action_chunk_to_execute = jnp.concatenate(
             [ action_chunk[:, : config.inference_delay],
@@ -185,7 +205,7 @@ def eval(
         # Return cos_hist_this per outer iteration (B, S)
         return (
             rng, next_obs, next_env_state, next_action_chunk, next_n
-        ), (dones, env_states, infos, cos_hist_this, action_var_this)
+        ), (dones, env_states, infos, cos_hist_this, action_var_this, backward_loss_per_env, cross_chunk_distance_per_env)
 
     rng, key = jax.random.split(rng)
     obs, env_state = env.reset_to_level(key, level, env_params)
@@ -195,7 +215,7 @@ def eval(
     n = jnp.ones(action_chunk.shape[1], dtype=jnp.int32)
 
     scan_length = math.ceil(env_params.max_timesteps / config.execute_horizon)
-    _, (dones, env_states, infos, cos_hist_iters, action_var_iters) = jax.lax.scan(
+    _, (dones, env_states, infos, cos_hist_iters, action_var_iters, backward_losses, cross_chunk_distances) = jax.lax.scan(
         execute_chunk,
         (rng, obs, env_state, action_chunk, n),
         None,
@@ -245,11 +265,42 @@ def eval(
     for key in ["returned_episode_returns", "returned_episode_lengths", "returned_episode_solved"]:
         if key in infos_flat:
             per_batch = _episode_stat(infos_flat[key])   # (B,)
+            # Keep backward-compatible scalar means
             return_info[key] = per_batch.mean()
+
+            # Add mean/std across parallel envs for episode length/return
+            if key == "returned_episode_lengths":
+                return_info["returned_episode_lengths_mean"] = jnp.nanmean(per_batch)
+                return_info["returned_episode_lengths_std"] = jnp.nanstd(per_batch)
+
+            if key == "returned_episode_returns":
+                return_info["returned_episode_returns_mean"] = jnp.nanmean(per_batch)
+                return_info["returned_episode_returns_std"] = jnp.nanstd(per_batch)
+
+    # If available, also report how long solved episodes took (mean/std over solved envs only)
+    if ("returned_episode_lengths" in infos_flat) and ("returned_episode_solved" in infos_flat):
+        lens_per_batch = _episode_stat(infos_flat["returned_episode_lengths"])  # (B,)
+        solved_mask = _episode_stat(infos_flat["returned_episode_solved"])      # (B,) in {0,1}
+        denom = jnp.maximum(1.0, solved_mask.sum())
+        solved_len_mean = (lens_per_batch * solved_mask).sum() / denom
+        # Compute masked variance safely
+        diffs = (lens_per_batch - solved_len_mean) * solved_mask
+        solved_len_var = (diffs * diffs).sum() / denom
+        return_info["returned_episode_lengths_solved_mean"] = solved_len_mean
+        return_info["returned_episode_lengths_solved_std"] = jnp.sqrt(solved_len_var)
 
     # Optional extra scalar logs
     if "match" in infos_flat:
         return_info["match"] = jnp.nanmean(infos_flat["match"])
+
+    # Backward-overlap loss across all outer steps and envs (lower is better)
+    # backward_losses: (L, B)
+    return_info["backward_overlap_loss"] = jnp.nanmean(backward_losses)
+    return_info["backward_overlap_loss_std"] = jnp.nanstd(backward_losses)
+
+    # Cross-chunk action distance at inference boundary
+    return_info["cross_chunk_distance_mean"] = jnp.nanmean(cross_chunk_distances)
+    return_info["cross_chunk_distance_std"] = jnp.nanstd(cross_chunk_distances)
 
     # Cosine artifacts: keep raw per-chunk; aggregate without masking
     cos_step_mean = jnp.nanmean(cos_hist_iters, axis=(0, 1))  # (S,)
@@ -432,8 +483,16 @@ def main(
             # print(f'training grasp, randomizing target location')
             levels = change_polygon_position_and_velocity(levels, pos_x=2,vel_x=vel_target, index=9)
             levels = change_polygon_position_and_velocity(levels, pos_x=2.5,vel_x=vel_target, index=10)
+        elif 'drone' in level_paths[0]:
+            # print(f'training grasp, randomizing target location')
+            levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4)
+            levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=7)
         else:
-            raise NotImplementedError("*** Level not recognized DR not implemented **")
+            if vel_target!=0.0:
+                print(f'skipping moving target for {level_paths[0]}')
+                return
+            
+            #raise NotImplementedError("*** Level not recognized DR not implemented **")
         if vel_target==0.0:
             env=DR_static_wrapper(env,level_paths[0])
 
@@ -510,21 +569,21 @@ def main(
                         header = not csv_path.exists()
                         df_var.to_csv(csv_path, mode="a", index=False, header=header)
 
-
-
         
-        cfg_coef=[x for x in range(0, 5)]
-        for w_a in cfg_coef:
-            c = dataclasses.replace(
-                config,
-                inference_delay=inference_delay,
-                execute_horizon=execute_horizon,
-                method=CFGCOS_MethodConfig(w_a=w_a),#u=u(a|o)+ cos_coef*w*(u(a|a',o)-u(a|o))
-            )
-            eval_and_record(c,f"cfg_BF_cos:wa{w_a}")
+        # cfg_coef=[x for x in range(1, 5)]
+        cfg_coef=list(np.arange(1, 5.5, 0.5))
+        # cfg_coef=[x for x in range(0, 3)]
+        # for w_a in cfg_coef:
+        #     c = dataclasses.replace(
+        #         config,
+        #         inference_delay=inference_delay,
+        #         execute_horizon=execute_horizon,
+        #         method=CFGCOS_MethodConfig(w_a=w_a),#u=u(a|o)+ cos_coef*w*(u(a|a',o)-u(a|o))
+        #     )
+        #     eval_and_record(c,f"cfg_BF_cos:wa{w_a}")
 
         #enhance guidance on action
-        for w in cfg_coef+[-1]:
+        for w in cfg_coef+[0,-1]:
         #u = w* u(actions,obs) + (1-w)* u(∅,obs)​​  =   u(∅,obs)​​  +  w (u(actions,obs)-u(∅,obs)​​)
             w_ao=w#w_ao=1+w
             w_o=1-w#w_o=-w
@@ -572,6 +631,7 @@ def main(
         #         # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
         #     )
         #     eval_and_record(c,f"cfg_BI:wa{w_a}")
+
         for w in cfg_coef:
             c = dataclasses.replace(
                 config,
@@ -592,6 +652,28 @@ def main(
                 # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
             )
             eval_and_record(c,f"cfg_BI:w{w}")
+
+        for w in cfg_coef:
+            w_nn=1-w-1
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFGMethodConfig(w_1=w_nn, w_2=1, w_3=w, w_4=0.0),
+                # u = (1-w2-w3) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+            )
+            eval_and_record(c,f"cfg_BI:wo{w}")
+
+        for w in cfg_coef:
+            w_nn=1-w-1
+            c = dataclasses.replace(
+                config,
+                inference_delay=inference_delay,
+                execute_horizon=execute_horizon,
+                method=CFGMethodConfig(w_1=w_nn, w_2=w, w_3=1, w_4=0.0),
+                # u = (1-w2-w3) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs) +w4 u(a',o)
+            )
+            eval_and_record(c,f"cfg_BI:wa{w}")
 
         #u = 0.5* w_o* u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​ + 0.5*w_a* u(actions,obs) + 0.5*(1-w_a)* u(∅,obs)​​ 
         #u = (0.5 * w_o + 0.5 * w_a ) * u(actions,obs) + 0.5*(1-w_o)* u(action,∅)​​   + 0.5*(1-w_a)* u(∅,obs)​​ 
@@ -618,11 +700,22 @@ def main(
         )
         eval_and_record(c,"naive_un",weak_state_dicts=None)
 
+        # BID
+        c = dataclasses.replace(
+            config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig()
+        )
+        eval_and_record(c,"BID_ca",weak_state_dicts=weak_state_dicts)
+
+        c = dataclasses.replace(
+            config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig(mask_action=True)
+        )
+        eval_and_record(c,"BID_un",weak_state_dicts=weak_state_dicts)
+
         #RTC
-        # c = dataclasses.replace(
-        #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig()
-        # )
-        # eval_and_record(c,"RTC_ca")
+        c = dataclasses.replace(
+            config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig()
+        )
+        eval_and_record(c,"RTC_ca")
 
         c = dataclasses.replace(
             config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=RealtimeMethodConfig(mask_action=True)
@@ -630,13 +723,13 @@ def main(
         eval_and_record(c,"RTC_un",weak_state_dicts=None)
 
 
-        # c = dataclasses.replace(
-        #     config,
-        #     inference_delay=inference_delay,
-        #     execute_horizon=execute_horizon,
-        #     method=RealtimeMethodConfig(prefix_attention_schedule="zeros"),
-        # )
-        # eval_and_record(c,"RTC_hard_ca")
+        c = dataclasses.replace(
+            config,
+            inference_delay=inference_delay,
+            execute_horizon=execute_horizon,
+            method=RealtimeMethodConfig(prefix_attention_schedule="zeros"),
+        )
+        eval_and_record(c,"RTC_hard_ca")
 
         c = dataclasses.replace(
             config,
@@ -646,18 +739,6 @@ def main(
         )
         eval_and_record(c,"RTC_hard_un",weak_state_dicts=None)
 
-        #BID
-        # c = dataclasses.replace(
-        #     config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig()
-        # )
-        # eval_and_record(c,"BID_ca",weak_state_dicts=weak_state_dicts)
-
-        c = dataclasses.replace(
-            config, inference_delay=inference_delay, execute_horizon=execute_horizon, method=BIDMethodConfig(mask_action=True)
-        )
-        eval_and_record(c,"BID_un",weak_state_dicts=weak_state_dicts)
-        #CFG
-        # cfg_coef=[x * 0.5 for x in range(2, 8.1)]
 
 
 
@@ -668,16 +749,17 @@ def main(
     tasks = []
     inference_delay = 1
     # extra horizons at fixed vel/noise
-    for execute_horizon in [3, 5]:
-        tasks.append({
-            "execute_horizon": execute_horizon,
-            "vel_target": 0.0,
-            "noise_std": 0.1,
-            "label": f"extra_horizon"
-        })
-    for execute_horizon in [1, 8]:
+    # for execute_horizon in [2, 4, 6, 8]:
+    #     tasks.append({
+    #         "execute_horizon": execute_horizon,
+    #         "vel_target": 0.0,
+    #         "noise_std": 0.1,
+    #         "label": f"extra_horizon"
+    #     })
+    for execute_horizon in [1,3,5,7]:
         # velocity sweeps
-        for vel_target in [0.1, 0.4, 0.7, 1.0, 1.3]:
+        for vel_target in [0.4, 0.8, 1.2]:
+        # for vel_target in [0.7, 1.3]:
             tasks.append({
                 "execute_horizon": execute_horizon,
                 "vel_target": vel_target,
@@ -685,13 +767,14 @@ def main(
                 "label": f"vel_target={vel_target:.2f}"
             })
         # noise sweeps at static target
-        for noisestd in [0.00, 0.1, 0.2, 0.4]:
-            tasks.append({
-                "execute_horizon": execute_horizon,
-                "vel_target": 0.0,
-                "noise_std": noisestd,
-                "label": f"noise_std={noisestd:.2f}"
-            })
+        # for noisestd in [ 0.1, 0.2, 0.3, 0.4]:
+        # # for noisestd in [0.00, 0.4]:
+        #     tasks.append({
+        #         "execute_horizon": execute_horizon,
+        #         "vel_target": 0.0,
+        #         "noise_std": noisestd,
+        #         "label": f"noise_std={noisestd:.2f}"
+        #     })
 
 
 
