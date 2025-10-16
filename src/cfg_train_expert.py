@@ -273,7 +273,7 @@ def main(config: Config):
         wrappers.LogWrapper(
             PreferenceDiversityRewardWrapper(
             DenseRewardWrapper(
-                wrappers.AutoReplayWrapper(ActObsHistoryWrapper(NoisyActionWrapper(env), act_history_length=4, obs_history_length=1))
+                wrappers.AutoReplayWrapper(ActObsHistoryWrapper(NoisyActionWrapper(env), act_history_length=8, obs_history_length=1))
             )
             )
         ),

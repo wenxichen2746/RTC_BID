@@ -157,6 +157,66 @@ class ActObsHistoryWrapper(wrappers.UnderspecifiedEnvWrapper):
         return env_state.stacked_act
 
 
+@struct.dataclass
+class NoisyActObsHistoryState:
+    env_state: kenv_state.EnvState
+    stacked_obs: jax.Array
+    stacked_act: jax.Array
+    original_obs: jax.Array
+
+
+class NoisyActObsHistoryWrapper(wrappers.UnderspecifiedEnvWrapper):
+    def __init__(
+        self,
+        env,
+        obs_history_length: int,
+        act_history_length: int,
+        noise_std: float = 0.1,
+    ):
+        super().__init__(env)
+        self.obs_history_length = obs_history_length
+        self.act_history_length = act_history_length
+        self.noise_std = noise_std
+
+    def step_env(self, key, state: NoisyActObsHistoryState, action, params):
+        noise_key, env_key = jax.random.split(key)
+        noisy_action = action + jax.random.normal(noise_key, action.shape) * self.noise_std if self.noise_std else action
+        obs, env_state, reward, done, info = self._env.step_env(env_key, state.env_state, noisy_action, params)
+        stacked_obs = jnp.roll(state.stacked_obs, -1, axis=0).at[-1].set(obs)
+        stacked_act = jnp.roll(state.stacked_act, -1, axis=0).at[-1].set(action)
+        actobs = jnp.concatenate([stacked_obs.flatten(), stacked_act.flatten()])
+        return actobs, NoisyActObsHistoryState(env_state, stacked_obs, stacked_act, obs), reward, done, info
+
+    def reset_to_level(self, rng, level, params):
+        obs, env_state = self._env.reset_to_level(rng, level, params)
+        stacked_obs = jnp.repeat(obs[None], self.obs_history_length, axis=0)
+        act_dim = self._env.action_space(params).shape[0]
+        stacked_act = jnp.zeros((self.act_history_length, act_dim), dtype=obs.dtype)
+        actobs = jnp.concatenate([stacked_obs.flatten(), stacked_act.flatten()])
+        return actobs, NoisyActObsHistoryState(env_state, stacked_obs, stacked_act, obs)
+
+    def action_space(self, params):
+        return self._env.action_space(params)
+
+    @staticmethod
+    def get_original_obs(env_state) -> jax.Array:
+        while not isinstance(env_state, NoisyActObsHistoryState):
+            env_state = env_state.env_state
+        return env_state.original_obs
+
+    @staticmethod
+    def get_stacked_obs(env_state) -> jax.Array:
+        while not isinstance(env_state, NoisyActObsHistoryState):
+            env_state = env_state.env_state
+        return env_state.stacked_obs
+
+    @staticmethod
+    def get_stacked_act(env_state) -> jax.Array:
+        while not isinstance(env_state, NoisyActObsHistoryState):
+            env_state = env_state.env_state
+        return env_state.stacked_act
+
+
 # ---------------- Target Attraction Shaping ----------------
 
 @struct.dataclass

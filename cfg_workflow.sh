@@ -196,11 +196,74 @@
 # done
 # uv run src/cfg_eval_flow.py     --run_path "./logs-bc/${RUN_NAME}"     --level-paths "${LEVEL_PATH}"     --output-dir "./logs-eval-cfg/${RUN_NAME}"
 
-uv run src/cfg_eval_flow.py --run_path ./logs-bc/run1009 --level-paths "worlds/l/catapult.json" "worlds/c/place_can_easy.json" "worlds/c/toss_bin.json" "worlds/l/grasp_easy.json" --output-dir ./logs-eval-cfg/1009_4envs
+# uv run src/cfg_eval_flow.py --run_path ./logs-bc/run1009 --level-paths "worlds/l/catapult.json" "worlds/c/place_can_easy.json" "worlds/c/toss_bin.json" "worlds/l/grasp_easy.json" --output-dir ./logs-eval-cfg/1009_4envs
+# uv run src/cfg_eval_flow.py --run_path ./logs-bc/1009_catapult_diversereward --level-paths "worlds/l/catapult.json" --output-dir ./logs-eval-cfg/1012_catapult
+# uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_place_can_easy --level-paths "worlds/c/place_can_easy.json" --output-dir ./logs-eval-cfg/1012_place_can_easy
+# uv run src/cfg_eval_flow.py --run_path ./logs-bc/0908_toss_bin --level-paths "worlds/c/toss_bin.json" --output-dir ./logs-eval-cfg/1012_toss_bin
+# uv run src/cfg_eval_flow.py --run_path ./logs-bc/1009_grasp_easy_diversereward --level-paths "worlds/l/grasp_easy.json" --output-dir ./logs-eval-cfg/1012_grasp_easy
 
 
-uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/0908_place_can_easy --level-paths "worlds/c/place_can_easy.json" --output-dir ./logs-eval-cfg/1009_place_can_easy
-uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/0908_toss_bin --level-paths "worlds/c/toss_bin.json" --output-dir ./logs-eval-cfg/1009_toss_bin
-uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/1009_grasp_easy_diversereward --level-paths "worlds/l/grasp_easy.json" --output-dir ./logs-eval-cfg/1009_grasp_easy
-uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/1009_catapult_diversereward --level-paths "worlds/l/catapult.json" --output-dir ./logs-eval-cfg/1009_catapult
+# uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/0908_place_can_easy --level-paths "worlds/c/place_can_easy.json" --output-dir ./logs-eval-cfg/1009_place_can_easy
+# uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/0908_toss_bin --level-paths "worlds/c/toss_bin.json" --output-dir ./logs-eval-cfg/1009_toss_bin
+# uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/1009_grasp_easy_diversereward --level-paths "worlds/l/grasp_easy.json" --output-dir ./logs-eval-cfg/1009_grasp_easy
+# uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/1009_catapult_diversereward --level-paths "worlds/l/catapult.json" --output-dir ./logs-eval-cfg/1009_catapult
 
+ENV_BATCH_1015=(
+  "grasp_easy worlds/l/grasp_easy.json"
+  "place_can_easy worlds/c/place_can_easy.json"
+  "toss_bin worlds/c/toss_bin.json" 
+  "catapult worlds/l/catapult.json"
+)
+
+echo "===== Step 1: Train experts (1001 batch) ====="
+for entry in "${ENV_BATCH_1015[@]}"; do
+  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+  RUN_NAME="1015_${ENV_NAME}_a8o1"
+  echo "--- [Step 1] ${RUN_NAME}"
+  uv run src/cfg_train_expert.py     --config.level-paths "${LEVEL_PATH}"     --config.wandb_name "${RUN_NAME}"
+done
+
+echo "
+===== Step 2: Generate domain-randomized data (1001 batch) ====="
+for entry in "${ENV_BATCH_1015[@]}"; do
+  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+  RUN_NAME="1015_${ENV_NAME}_a8o1"
+  echo "--- [Step 2] ${RUN_NAME}"
+  uv run src/cfg_generate_data_dr.py     --config.run-path "./logs-expert/${RUN_NAME}"     --config.level-path "${LEVEL_PATH}"
+done
+
+
+run_with_retry() {
+  local retry_count=0
+  until "$@"
+  do
+    retry_count=$((retry_count + 1))
+    if [[ ${retry_count} -ge ${MAX_RETRIES} ]]; then
+      echo "!!!!!! Command failed after ${MAX_RETRIES} attempts. Moving on. !!!!!!"
+      return 1 # Return a failure code
+    fi
+    echo "****** Command failed. Retrying in ${RETRY_DELAY}s (Attempt ${retry_count}/${MAX_RETRIES}) ******"
+    sleep ${RETRY_DELAY}
+  done
+  return 0 # Return a success code
+}
+echo "
+===== Step 3: Train flows (1001 batch) ====="
+for entry in "${ENV_BATCH_1014[@]}"; do
+  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+  RUN_NAME="1015_${ENV_NAME}_a8o1"
+  echo "--- [Step 3] ${RUN_NAME}"
+  run_with_retry uv run src/cfg_train_flow.py --config.run-path "./logs-expert/${RUN_NAME}" --config.level-paths "${LEVEL_PATH}" --config.wandb_name "${RUN_NAME}"
+done
+
+echo "
+===== Step 4: Evaluate flows (1001 batch) ====="
+for entry in "${ENV_BATCH_1014[@]}"; do
+  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+  RUN_NAME="1015_${ENV_NAME}_a8o1"
+  echo "--- [Step 4] ${RUN_NAME}"
+  run_with_retry uv run src/cfg_eval_flow.py --run_path "./logs-bc/${RUN_NAME}" --level-paths "${LEVEL_PATH}" --output-dir "./logs-eval-cfg/${RUN_NAME}"
+done
+
+echo "
+All steps completed."

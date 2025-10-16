@@ -19,7 +19,7 @@ import tyro
 
 import cfg_train_expert
 from util.env_dr import *
-
+from util.env_wrappers import NoisyActObsHistoryWrapper
 
 @dataclasses.dataclass
 class Config:
@@ -66,8 +66,13 @@ def main(config: Config):
     env = cfg_train_expert.BatchEnvWrapper(
         wrappers.LogWrapper(
             wrappers.AutoReplayWrapper(
-                    wrappers.AutoReplayWrapper(cfg_train_expert.ActObsHistoryWrapper(cfg_train_expert.NoisyActionWrapper(env), act_history_length=4, obs_history_length=1))
-            )
+                    wrappers.AutoReplayWrapper(
+                        NoisyActObsHistoryWrapper(
+                        env,
+                        obs_history_length=config.obs_history_length,
+                        act_history_length=config.act_history_length,
+                        noise_std=0.1,))
+                            )
         ),
         config.num_envs,
     )

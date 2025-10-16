@@ -10,6 +10,7 @@ from .env_wrappers import (
     NoisyActionWrapper,
     StickyActionWrapper,
     ActObsHistoryWrapper,
+    NoisyActObsHistoryWrapper,
     TargetRewardState,
     PreferenceDiversityRewardWrapper,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "NoisyActionWrapper",
     "StickyActionWrapper",
     "ActObsHistoryWrapper",
+    "NoisyActObsHistoryWrapper",
     "TargetRewardState",
     "PreferenceDiversityRewardWrapper",
 ]

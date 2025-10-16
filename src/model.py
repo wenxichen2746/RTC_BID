@@ -248,21 +248,49 @@ class FlowPolicyCFG2(nnx.Module):
 
     # Generalized CFG with two independent nulls
     # u = (1-2*w1) u(∅,∅) + w2 u(actions,∅) + w3 u(∅,obs)
-    def action_cfg(self, rng: jax.Array, context: jax.Array, num_steps: int, w1: float, w2: float, w3: float, w4: float=0.0) -> jax.Array:
+    def action_cfg(
+        self,
+        rng: jax.Array,
+        context: jax.Array,
+        num_steps: int,
+        w1,
+        w2,
+        w3,
+        w4=0.0,
+    ) -> jax.Array:
         dt = 1.0 / num_steps
         B = context.shape[0]
         mask_F = jnp.zeros((B,), dtype=bool)
         mask_T = jnp.ones((B,), dtype=bool)
 
+        def _normalize_weight_param(param):
+            if isinstance(param, (float, int)):
+                return jnp.full((B,), float(param), dtype=context.dtype)
+            param_arr = jnp.asarray(param, dtype=context.dtype)
+            if param_arr.ndim == 0:
+                return jnp.broadcast_to(param_arr, (B,))
+            if param_arr.shape[0] != B:
+                raise ValueError(f"Weight array has shape {param_arr.shape}, expected ({B},)")
+            return param_arr
+
+        w1_arr = _normalize_weight_param(w1)
+        w2_arr = _normalize_weight_param(w2)
+        w3_arr = _normalize_weight_param(w3)
+        w4_arr = _normalize_weight_param(w4)
+
         def step(carry, _):
             x_t, time = carry
-            # compute each term only if its weight is non-zero; otherwise use a zero placeholder
-            u_nn = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_T) if w1 != 0.0 else jnp.zeros_like(x_t)
-            u_an = self(context, x_t, time, use_null_act=mask_F, use_null_obs=mask_T) if w2 != 0.0 else jnp.zeros_like(x_t)
-            u_no = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_F) if w3 != 0.0 else jnp.zeros_like(x_t)
-            u_ao = self(context, x_t, time, use_null_act=mask_F, use_null_obs=mask_F) if w4 != 0.0 else jnp.zeros_like(x_t)  # (actions, obs)
+            u_nn = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_T)
+            u_an = self(context, x_t, time, use_null_act=mask_F, use_null_obs=mask_T)
+            u_no = self(context, x_t, time, use_null_act=mask_T, use_null_obs=mask_F)
+            u_ao = self(context, x_t, time, use_null_act=mask_F, use_null_obs=mask_F)
 
-            u = w1 * u_nn + w2 * u_an + w3 * u_no + w4 * u_ao
+            u = (
+                w1_arr[:, None, None] * u_nn
+                + w2_arr[:, None, None] * u_an
+                + w3_arr[:, None, None] * u_no
+                + w4_arr[:, None, None] * u_ao
+            )
             return (x_t + dt * u, time + dt), None
 
         noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
@@ -296,7 +324,7 @@ class FlowPolicyCFG2(nnx.Module):
         return jnp.mean(jnp.square(pred - u_t))
 
     
-    def action_cfg_cos(self, rng: jax.Array, context: jax.Array, num_steps: int, w_a: float):
+    def action_cfg_cos(self, rng: jax.Array, context: jax.Array, num_steps: int, w_a):
         """
         Returns:
         x_1:        (B, action_chunk_size, action_dim) final action chunk
@@ -306,6 +334,18 @@ class FlowPolicyCFG2(nnx.Module):
         B = context.shape[0]
         mask_F = jnp.zeros((B,), dtype=bool)
         mask_T = jnp.ones((B,), dtype=bool)
+
+        def _normalize_weight_param(param):
+            if isinstance(param, (float, int)):
+                return jnp.full((B,), float(param), dtype=context.dtype)
+            param_arr = jnp.asarray(param, dtype=context.dtype)
+            if param_arr.ndim == 0:
+                return jnp.broadcast_to(param_arr, (B,))
+            if param_arr.shape[0] != B:
+                raise ValueError(f"Weight array has shape {param_arr.shape}, expected ({B},)")
+            return param_arr
+
+        w_a_arr = _normalize_weight_param(w_a)
 
         def step(carry, _):
             x_t, time = carry
@@ -325,14 +365,22 @@ class FlowPolicyCFG2(nnx.Module):
             # cos_coef = jnp.maximum(cos_coef_raw, 0.0).reshape(B, 1, 1)
 
             # update action
-            u = u_no + w_a * cos_coef * u_guid
+            u = u_no + w_a_arr[:, None, None] * cos_coef * u_guid
             return (x_t + dt * u, time + dt), cos_coef_raw  # collect raw cos per step (B,)
         noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
         (x_1, _), cos_history = jax.lax.scan(step, (noise, 0.0), length=num_steps)
         # cos_history has shape (num_steps, B)
         return x_1, cos_history
     
-    def action_cfg_BI_cos(self, rng: jax.Array, context: jax.Array, num_steps: int, w_o: float =1.0, w_a: float =1.0, weight_schedule: bool = False):
+    def action_cfg_BI_cos(
+        self,
+        rng: jax.Array,
+        context: jax.Array,
+        num_steps: int,
+        w_o=1.0,
+        w_a=1.0,
+        weight_schedule=False,
+    ):
         """
         Returns:
         x_1:        (B, action_chunk_size, action_dim) final action chunk
@@ -343,6 +391,30 @@ class FlowPolicyCFG2(nnx.Module):
         B = context.shape[0]
         mask_F = jnp.zeros((B,), dtype=bool)
         mask_T = jnp.ones((B,), dtype=bool)
+
+        def _normalize_weight_param(param):
+            if isinstance(param, (float, int)):
+                return jnp.full((B,), float(param), dtype=context.dtype)
+            param_arr = jnp.asarray(param, dtype=context.dtype)
+            if param_arr.ndim == 0:
+                return jnp.broadcast_to(param_arr, (B,))
+            if param_arr.shape[0] != B:
+                raise ValueError(f"Weight array has shape {param_arr.shape}, expected ({B},)")
+            return param_arr
+
+        def _normalize_bool_param(param):
+            if isinstance(param, bool):
+                return jnp.full((B,), param, dtype=bool)
+            param_arr = jnp.asarray(param, dtype=bool)
+            if param_arr.ndim == 0:
+                return jnp.broadcast_to(param_arr, (B,))
+            if param_arr.shape[0] != B:
+                raise ValueError(f"Weight schedule array has shape {param_arr.shape}, expected ({B},)")
+            return param_arr
+
+        w_a_arr = _normalize_weight_param(w_a)
+        w_o_arr = _normalize_weight_param(w_o)
+        schedule_arr = _normalize_bool_param(weight_schedule)
 
         def step(carry, _):
             x_t, time = carry
@@ -362,15 +434,19 @@ class FlowPolicyCFG2(nnx.Module):
             cos_coef = cos_coef_raw[:, None, None]  
 
             # update action
-            if weight_schedule:
-                w_a_schedule = self._linear_schedule(time, 1.0, 0.5)
-                w_o_schedule = self._linear_schedule(time, 0.5, 1.0)
-                _w_a = w_a_schedule * w_a
-                _w_o = w_o_schedule * w_o
-            else:
-                _w_a = w_a
-                _w_o = w_o
-            u = u_no + _w_a * cos_coef * u_guid_a + _w_o * u_guid_o
+            w_a_schedule = self._linear_schedule(time, 1.0, 0.5)
+            w_o_schedule = self._linear_schedule(time, 0.5, 1.0)
+            w_a_effective = jnp.where(
+                schedule_arr[:, None, None],
+                w_a_schedule * w_a_arr[:, None, None],
+                w_a_arr[:, None, None],
+            )
+            w_o_effective = jnp.where(
+                schedule_arr[:, None, None],
+                w_o_schedule * w_o_arr[:, None, None],
+                w_o_arr[:, None, None],
+            )
+            u = u_no + w_a_effective * cos_coef * u_guid_a + w_o_effective * u_guid_o
             return (x_t + dt * u, time + dt), cos_coef_raw  # collect raw cos per step (B,)
         noise = jax.random.normal(rng, shape=(B, self.action_chunk_size, self.action_dim))
         (x_1, _), cos_history = jax.lax.scan(step, (noise, 0.0), length=num_steps)
