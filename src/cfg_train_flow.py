@@ -84,7 +84,7 @@ def main(config: Config):
     train_base_env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
     train_base_env = DR_static_wrapper(train_base_env, config.level_paths[0])
     train_env = cfg_train_expert.ActObsHistoryWrapper(
-        train_base_env, act_history_length=config.act_history_length, obs_history_length=1
+        train_base_env, act_history_length=config.act_history_length, obs_history_length=config.obs_history_length
     )
 
     eval_env_base = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)

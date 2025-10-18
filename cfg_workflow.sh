@@ -214,25 +214,6 @@ ENV_BATCH_1015=(
   "toss_bin worlds/c/toss_bin.json" 
   "catapult worlds/l/catapult.json"
 )
-
-echo "===== Step 1: Train experts (1001 batch) ====="
-for entry in "${ENV_BATCH_1015[@]}"; do
-  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-  RUN_NAME="1015_${ENV_NAME}_a8o1"
-  echo "--- [Step 1] ${RUN_NAME}"
-  uv run src/cfg_train_expert.py     --config.level-paths "${LEVEL_PATH}"     --config.wandb_name "${RUN_NAME}"
-done
-
-echo "
-===== Step 2: Generate domain-randomized data (1001 batch) ====="
-for entry in "${ENV_BATCH_1015[@]}"; do
-  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-  RUN_NAME="1015_${ENV_NAME}_a8o1"
-  echo "--- [Step 2] ${RUN_NAME}"
-  uv run src/cfg_generate_data_dr.py     --config.run-path "./logs-expert/${RUN_NAME}"     --config.level-path "${LEVEL_PATH}"
-done
-
-
 run_with_retry() {
   local retry_count=0
   until "$@"
@@ -247,9 +228,29 @@ run_with_retry() {
   done
   return 0 # Return a success code
 }
+
+# echo "===== Step 1: Train experts (1001 batch) ====="
+# for entry in "${ENV_BATCH_1015[@]}"; do
+#   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+#   RUN_NAME="1015_${ENV_NAME}_a8o1"
+#   echo "--- [Step 1] ${RUN_NAME}"
+#   run_with_retry uv run src/cfg_train_expert.py     --config.level-paths "${LEVEL_PATH}"     --config.wandb_name "${RUN_NAME}"
+# done
+
+# echo "
+# ===== Step 2: Generate domain-randomized data (1001 batch) ====="
+# for entry in "${ENV_BATCH_1015[@]}"; do
+#   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+#   RUN_NAME="1015_${ENV_NAME}_a8o1"
+#   echo "--- [Step 2] ${RUN_NAME}"
+#   uv run src/cfg_generate_data_dr.py     --config.run-path "./logs-expert/${RUN_NAME}"     --config.level-path "${LEVEL_PATH}"
+# done
+
+
+
 echo "
 ===== Step 3: Train flows (1001 batch) ====="
-for entry in "${ENV_BATCH_1014[@]}"; do
+for entry in "${ENV_BATCH_1015[@]}"; do
   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
   RUN_NAME="1015_${ENV_NAME}_a8o1"
   echo "--- [Step 3] ${RUN_NAME}"
@@ -258,7 +259,7 @@ done
 
 echo "
 ===== Step 4: Evaluate flows (1001 batch) ====="
-for entry in "${ENV_BATCH_1014[@]}"; do
+for entry in "${ENV_BATCH_1015[@]}"; do
   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
   RUN_NAME="1015_${ENV_NAME}_a8o1"
   echo "--- [Step 4] ${RUN_NAME}"

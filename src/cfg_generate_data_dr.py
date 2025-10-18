@@ -31,6 +31,8 @@ class Config:
     num_steps: int = 1_000_000
     solve_rate_threshold: float = 0.65
     action_sample_std: float | None = None
+    obs_history_length: int = 1
+    act_history_length: int = 8
 
 @struct.dataclass
 class Data:
