@@ -233,11 +233,8 @@ def eval(
     env_offsets = np.concatenate(([0], np.cumsum(env_counts_arr)))
     env_slices = [slice(int(env_offsets[i]), int(env_offsets[i + 1])) for i in range(num_weight_variants)]
 
-    eval_base_env = kenv.make_kinetix_env_from_name(
-        "Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params
-    )
     eval_env = NoisyActObsHistoryWrapper(
-        eval_base_env,
+        env,
         obs_history_length=config.obs_history_length,
         act_history_length=config.act_history_length,
         noise_std=noise_std,

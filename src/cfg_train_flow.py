@@ -81,14 +81,8 @@ def main(config: Config):
     levels = cfg_train_expert.load_levels(config.level_paths, static_env_params, env_params)
     static_env_params = static_env_params.replace(screen_dim=cfg_train_expert.SCREEN_DIM)
 
-    train_base_env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
-    train_base_env = DR_static_wrapper(train_base_env, config.level_paths[0])
-    train_env = cfg_train_expert.ActObsHistoryWrapper(
-        train_base_env, act_history_length=config.act_history_length, obs_history_length=config.obs_history_length
-    )
-
-    eval_env_base = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
-    eval_env_base = DR_static_wrapper(eval_env_base, config.level_paths[0])
+    env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
+    env = DR_static_wrapper(env, config.level_paths[0])
 
     mesh = jax.make_mesh((jax.local_device_count(),), ("level",))
     sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("level"))
@@ -127,10 +121,8 @@ def main(config: Config):
     data: generate_data.Data = generate_data.Data(**data)
     print(f"Truncated data to {data.obs.shape[1]:_} steps ({valid_steps // config.batch_size:_} batches)")
 
-    obs_dim = data.obs.shape[-1]
-    action_dim = train_env.action_space(env_params).shape[0]
     obs_dim_context = data.obs.shape[-1]
-    action_dim = train_env.action_space(env_params).shape[0]
+    action_dim = env.action_space(env_params).shape[0]
 
     context_act_len = config.act_history_length * action_dim
     assert context_act_len <= obs_dim_context
@@ -219,7 +211,7 @@ def main(config: Config):
         eval_info = {}
         for horizon in range(1, config.eval.model.action_chunk_size + 1):
             eval_config = dataclasses.replace(config.eval, execute_horizon=horizon)
-            info, _, _ = _eval.eval(eval_config, eval_env_base, key, level, eval_policy, env_params, static_env_params)
+            info, _, _ = _eval.eval(eval_config, env, key, level, eval_policy, env_params, static_env_params)
             eval_info.update({f"{k}_{horizon}": v for k, v in info.items()})
         video = None
         return EpochCarry(rng, train_state, epoch_carry.graphdef), ({**train_info, **eval_info}, video)
