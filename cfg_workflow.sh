@@ -208,6 +208,8 @@
 # uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/1009_grasp_easy_diversereward --level-paths "worlds/l/grasp_easy.json" --output-dir ./logs-eval-cfg/1009_grasp_easy
 # uv run src/cfg_eval_flow_dynamicenv.py --run_path ./logs-bc/1009_catapult_diversereward --level-paths "worlds/l/catapult.json" --output-dir ./logs-eval-cfg/1009_catapult
 
+
+
 ENV_BATCH_1015=(
   "grasp_easy worlds/l/grasp_easy.json"
   "place_can_easy worlds/c/place_can_easy.json"
@@ -228,23 +230,24 @@ run_with_retry() {
   done
   return 0 # Return a success code
 }
+DATE = "1107"
 
-# echo "===== Step 1: Train experts (1001 batch) ====="
-# for entry in "${ENV_BATCH_1015[@]}"; do
-#   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-#   RUN_NAME="1015_${ENV_NAME}_a8o1"
-#   echo "--- [Step 1] ${RUN_NAME}"
-#   run_with_retry uv run src/cfg_train_expert.py     --config.level-paths "${LEVEL_PATH}"     --config.wandb_name "${RUN_NAME}"
-# done
+echo "===== Step 1: Train experts (1001 batch) ====="
+for entry in "${ENV_BATCH_1015[@]}"; do
+  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+  RUN_NAME="1107_${ENV_NAME}_a2o1"
+  echo "--- [Step 1] ${RUN_NAME}"
+  run_with_retry uv run src/cfg_train_expert.py  --config.act_history_length 2   --config.level-paths "${LEVEL_PATH}"     --config.wandb_name "${RUN_NAME}"
+done
 
-# echo "
-# ===== Step 2: Generate domain-randomized data (1001 batch) ====="
-# for entry in "${ENV_BATCH_1015[@]}"; do
-#   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-#   RUN_NAME="1015_${ENV_NAME}_a8o1"
-#   echo "--- [Step 2] ${RUN_NAME}"
-#   uv run src/cfg_generate_data_dr.py     --config.run-path "./logs-expert/${RUN_NAME}"     --config.level-path "${LEVEL_PATH}"
-# done
+echo "
+===== Step 2: Generate domain-randomized data (1001 batch) ====="
+for entry in "${ENV_BATCH_1015[@]}"; do
+  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+  RUN_NAME="1107_${ENV_NAME}_a2o1"
+  echo "--- [Step 2] ${RUN_NAME}"
+  uv run src/cfg_generate_data_dr.py  --config.act_history_length 2   --config.run-path "./logs-expert/${RUN_NAME}"     --config.level-path "${LEVEL_PATH}"
+done
 
 
 
@@ -252,19 +255,24 @@ echo "
 ===== Step 3: Train flows (1001 batch) ====="
 for entry in "${ENV_BATCH_1015[@]}"; do
   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-  RUN_NAME="1015_${ENV_NAME}_a8o1"
+  RUN_NAME="1107_${ENV_NAME}_a2o1"
   echo "--- [Step 3] ${RUN_NAME}"
-  run_with_retry uv run src/cfg_train_flow.py --config.run-path "./logs-expert/${RUN_NAME}" --config.level-paths "${LEVEL_PATH}" --config.wandb_name "${RUN_NAME}"
+  run_with_retry uv run src/cfg_train_flow.py  --config.act_history_length 2  --config.run-path "./logs-expert/${RUN_NAME}" --config.level-paths "${LEVEL_PATH}" --config.wandb_name "${RUN_NAME}"
 done
 
-echo "
-===== Step 4: Evaluate flows (1001 batch) ====="
-for entry in "${ENV_BATCH_1015[@]}"; do
-  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-  RUN_NAME="1015_${ENV_NAME}_a8o1"
-  echo "--- [Step 4] ${RUN_NAME}"
-  run_with_retry uv run src/cfg_eval_flow.py --run_path "./logs-bc/${RUN_NAME}" --level-paths "${LEVEL_PATH}" --output-dir "./logs-eval-cfg/${RUN_NAME}"
-done
+# run_with_retry uv run src/cfg_eval_flow.py --run_path ./logs-bc/run1015 --level-paths "worlds/l/catapult.json" "worlds/c/place_can_easy.json" "worlds/c/toss_bin.json" "worlds/l/grasp_easy.json" --output-dir ./logs-eval-cfg/1015_4envs  --config.test-moving-target False
+
+# echo "
+# ===== Step 4: Evaluate flows (1001 batch) ====="
+# for entry in "${ENV_BATCH_1015[@]}"; do
+#   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+#   RUN_NAME="1022_${ENV_NAME}_a8o1"
+#   echo "--- [Step 4] ${RUN_NAME}"
+#   run_with_retry uv run src/cfg_eval_flow.py --run_path "./logs-bc/${RUN_NAME}" --level-paths "${LEVEL_PATH}" --output-dir "./logs-eval-cfg/${RUN_NAME}" --config.default_test False
+# done
 
 echo "
 All steps completed."
+
+
+uv run src/cfg_eval_flow.py --run_path ./logs-bc/run1015 --level-paths "worlds/l/catapult.json" "worlds/c/place_can_easy.json" "worlds/c/toss_bin.json" "worlds/l/grasp_easy.json" --output-dir ./logs-eval-cfg/1022_4envs  

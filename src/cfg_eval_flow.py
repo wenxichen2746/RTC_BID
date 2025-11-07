@@ -9,7 +9,7 @@ import functools
 import math
 import pathlib
 import pickle
-from typing import Sequence
+from typing import Annotated, Sequence
 
 import flax.nnx as nnx
 import jax
@@ -149,8 +149,8 @@ class CFG_BI_COS_MethodConfig:
 class EvalConfig:
     step: int = -1
     weak_step: int = 5 #| None = None
-    num_evals: int =  4096 #2000
-    max_cfg_methods_per_batch: int|None = None
+    num_evals: int =  2000 #2000
+    max_cfg_methods_per_batch: int|None = 10
     
     num_flow_steps: int = 5
     
@@ -163,6 +163,9 @@ class EvalConfig:
 
     obs_history_length: int = 1
     act_history_length: int = 8 #4
+
+    test_moving_target: Annotated[bool, tyro.conf.FlagConversionOff] = True
+    default_test: Annotated[bool, tyro.conf.FlagConversionOff] = True
 
 
 def eval(
@@ -541,11 +544,11 @@ def main(
     levels = train_expert.load_levels(level_paths, static_env_params, env_params)
     static_env_params = static_env_params.replace(screen_dim=train_expert.SCREEN_DIM)
 
-    base_env_for_shape = kenv.make_kinetix_env_from_name(
+    env = kenv.make_kinetix_env_from_name(
         "Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params
     )
     _env = cfg_train_expert.ActObsHistoryWrapper(
-        base_env_for_shape,
+        env,
         act_history_length=config.act_history_length,
         obs_history_length=config.obs_history_length,
     )
@@ -659,38 +662,67 @@ def main(
                 config, env, rng, level, policy, env_params, static_env_params, weak_policy, noise_std=test_noise_std
             )
             return eval_info, video, artifacts
-        
-        if 'hard_lunar_lander' in level_paths[0]:   
-            # print(f'training LL, target moving at vel{vel_target}')
-            levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4) #change to vel_y=something here if needed
-        elif 'grasp' in level_paths[0]:
-            # print(f'training grasp, randomizing target location')
-            levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=10)
-        elif 'toss_bin' in level_paths[0]:
-            # print(f'training grasp, randomizing target location')
-            levels = change_polygon_position_and_velocity(levels, pos_x=None,vel_x=vel_target, index=9)
-            levels = change_polygon_position_and_velocity(levels, pos_x=None,vel_x=vel_target, index=10)
-            levels = change_polygon_position_and_velocity(levels, pos_x=None,vel_x=vel_target, index=11)
-        elif 'place_can_easy' in level_paths[0]:
-            # print(f'training grasp, randomizing target location')
-            levels = change_polygon_position_and_velocity(levels, pos_x=2,vel_x=vel_target, index=9)
-            levels = change_polygon_position_and_velocity(levels, pos_x=2.5,vel_x=vel_target, index=10)
-        elif 'drone' in level_paths[0]:
-            # print(f'training grasp, randomizing target location')
-            levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=4)
-            levels = change_polygon_position_and_velocity(levels, pos_x=1,vel_x=vel_target, index=7)
-        elif 'catapult' in level_paths[0]:
-            # print(f'training catapult, randomizing target location')
-            levels = change_polygon_position_and_velocity(levels, pos_x=2.73,vel_x=vel_target*0.5, index=7)
-            levels = change_polygon_position_and_velocity(levels, pos_x=2.47,vel_x=vel_target*0.5, index=5)
-            levels = change_polygon_position_and_velocity(levels, pos_x=2.97,vel_x=vel_target*0.5, index=6)
-        else:
-            if vel_target!=0.0:
-                print(f'skipping moving target for {level_paths[0]}')
-                return
-            #raise NotImplementedError("*** Level not recognized DR not implemented **")
-        if vel_target==0.0:
-            env=DR_static_wrapper(env,level_paths[0])
+
+        if config.test_moving_target:
+            handled_level_indices = set()
+
+            def _apply_updates(match_token, *operations):
+                nonlocal levels
+                matches = [match_token in path for path in level_paths]
+                if not any(matches):
+                    return False
+                handled_level_indices.update(
+                    idx for idx, is_match in enumerate(matches) if is_match
+                )
+                for update_kwargs in operations:
+                    levels = change_polygon_position_and_velocity(
+                        levels,
+                        pos_x=update_kwargs.get("pos_x"),
+                        pos_y=update_kwargs.get("pos_y"),
+                        vel_x=update_kwargs.get("vel_x"),
+                        vel_y=update_kwargs.get("vel_y"),
+                        index=update_kwargs.get("index", 4),
+                        level_paths=level_paths,
+                        level_match=match_token,
+                    )
+                return True
+
+            _apply_updates("hard_lunar_lander", {"pos_x": 1, "vel_x": vel_target, "index": 4})
+            _apply_updates("grasp", {"pos_x": 1, "vel_x": vel_target, "index": 10})
+            _apply_updates(
+                "toss_bin",
+                {"pos_x": None, "vel_x": vel_target, "index": 9},
+                {"pos_x": None, "vel_x": vel_target, "index": 10},
+                {"pos_x": None, "vel_x": vel_target, "index": 11},
+            )
+            _apply_updates(
+                "place_can_easy",
+                {"pos_x": 2, "vel_x": vel_target, "index": 9},
+                {"pos_x": 2.5, "vel_x": vel_target, "index": 10},
+            )
+            _apply_updates(
+                "drone",
+                {"pos_x": 1, "vel_x": vel_target, "index": 4},
+                {"pos_x": 1, "vel_x": vel_target, "index": 7},
+            )
+            _apply_updates(
+                "catapult",
+                {"pos_x": 2.73, "vel_x": vel_target * 0.5, "index": 7},
+                {"pos_x": 2.47, "vel_x": vel_target * 0.5, "index": 5},
+                {"pos_x": 2.97, "vel_x": vel_target * 0.5, "index": 6},
+            )
+
+            if vel_target != 0.0:
+                unmatched = [
+                    path for idx, path in enumerate(level_paths) if idx not in handled_level_indices
+                ]
+                if unmatched:
+                    level_list = ", ".join(unmatched)
+                    print(f"skipping moving target for {level_list}")
+                    return
+
+            if vel_target == 0.0 and level_paths:
+                env = DR_static_wrapper(env, level_paths[0])
 
         def eval_and_record(c, method_names, weak_state_dicts=None, variant_info=None):
             method_labels = [method_names] if isinstance(method_names, str) else list(method_names)
@@ -764,24 +796,44 @@ def main(
                         else:
                             results[key].append(_maybe_nan(val))
 
+            def _normalize_artifact(arr: np.ndarray, levels: int, methods: int) -> np.ndarray:
+                arr = np.asarray(arr)
+                if arr.ndim == 0:
+                    arr = arr.reshape(1, 1, 1)
+                elif arr.ndim == 1:
+                    arr = arr.reshape(1, 1, -1)
+                elif arr.ndim == 2:
+                    if arr.shape[0] == levels and methods == 1:
+                        arr = arr[:, None, :]
+                    elif arr.shape[0] == methods and levels == 1:
+                        arr = arr[None, :, :]
+                    elif arr.shape[0] == levels:
+                        arr = arr[:, None, :]
+                    elif arr.shape[0] == methods:
+                        arr = arr[None, :, :]
+                    else:
+                        arr = arr.reshape(1, arr.shape[0], arr.shape[1])
+                if arr.ndim == 3 and arr.shape[0] == methods and arr.shape[1] == levels:
+                    arr = np.swapaxes(arr, 0, 1)
+                if arr.ndim < 3:
+                    arr = arr.reshape((1,) * (3 - arr.ndim) + arr.shape)
+                if arr.ndim > 3:
+                    arr = arr.reshape(arr.shape[0], arr.shape[1], -1)
+                if arr.shape[0] == 1 and levels > 1:
+                    arr = np.repeat(arr, levels, axis=0)
+                if arr.shape[1] == 1 and methods > 1:
+                    arr = np.repeat(arr, methods, axis=1)
+                if arr.shape[0] != levels:
+                    raise ValueError(f"Unexpected level dimension {arr.shape[0]} vs {levels}")
+                if arr.shape[1] != methods:
+                    raise ValueError(f"Unexpected method dimension {arr.shape[1]} vs {methods}")
+                return arr
+
             if cos_art is not None:
-                ep_mean = np.asarray(cos_art["episode_mean"])
-                ep_std = np.asarray(cos_art["episode_std"])
-                if ep_mean.ndim == 1:
-                    ep_mean = ep_mean[None, :]
-                    ep_std = ep_std[None, :]
-                if ep_mean.shape[0] == 1 and num_methods > 1:
-                    ep_mean = np.repeat(ep_mean, num_methods, axis=0)
-                    ep_std = np.repeat(ep_std, num_methods, axis=0)
+                ep_mean = _normalize_artifact(cos_art["episode_mean"], num_levels, num_methods)
+                ep_std = _normalize_artifact(cos_art["episode_std"], num_levels, num_methods)
+
                 for method_idx, label in enumerate(method_labels):
-                    if method_idx >= ep_mean.shape[0]:
-                        continue
-                    mean_slice = np.asarray(ep_mean[method_idx])
-                    std_slice = np.asarray(ep_std[method_idx])
-                    if not np.isfinite(mean_slice).any():
-                        continue
-                    mean_vals = mean_slice.reshape(-1)
-                    std_vals = std_slice.reshape(-1)
                     info = variant_info[method_idx]
                     variant_type = info.get("type", "none")
                     env_count_row = int(info.get("env_count", c.num_evals))
@@ -795,50 +847,45 @@ def main(
                         schedule_record = np.nan
                     else:
                         schedule_record = bool(schedule_val)
-                    row = {
-                        "method": label,
-                        "execute_horizon": execute_horizon,
-                        "env_vel": vel_target,
-                        "noise_std": test_noise_std,
-                        "cfg_variant_type": variant_type,
-                        "cfg_env_count": env_count_row,
-                        "cfg_w1": _maybe_nan(weights_map.get("w1", np.nan)),
-                        "cfg_w2": _maybe_nan(weights_map.get("w2", np.nan)),
-                        "cfg_w3": _maybe_nan(weights_map.get("w3", np.nan)),
-                        "cfg_w4": _maybe_nan(weights_map.get("w4", np.nan)),
-                        "cfg_w_a": _maybe_nan(weights_map.get("w_a", np.nan)),
-                        "cfg_w_o": _maybe_nan(weights_map.get("w_o", np.nan)),
-                        "cfg_weight_schedule": schedule_record,
-                        "cos_overall_mean": float(np.nanmean(ep_mean[method_idx])),
-                        "cos_overall_std": float(np.nanstd(ep_mean[method_idx])),
-                    }
-                    for s, (mean_val, std_val) in enumerate(zip(mean_vals, std_vals)):
-                        row[f"cos_mean_s{s}"] = float(np.nanmean(np.asarray(mean_val)))
-                        row[f"cos_std_s{s}"] = float(np.nanmean(np.asarray(std_val)))
 
-                    df_cos = pd.DataFrame([row])
-                    csv_path = pathlib.Path(output_dir) / "cosine_analysis.csv"
-                    header = not csv_path.exists()
-                    df_cos.to_csv(csv_path, mode="a", index=False, header=header)
+                    for level_idx, level_name in enumerate(level_paths):
+                        mean_slice = np.asarray(ep_mean[level_idx, method_idx])
+                        std_slice = np.asarray(ep_std[level_idx, method_idx])
+                        if not np.isfinite(mean_slice).any():
+                            continue
+                        mean_vals = mean_slice.reshape(-1)
+                        std_vals = std_slice.reshape(-1)
+                        row = {
+                            "level": level_name,
+                            "method": label,
+                            "execute_horizon": execute_horizon,
+                            "env_vel": vel_target,
+                            "noise_std": test_noise_std,
+                            "cfg_variant_type": variant_type,
+                            "cfg_env_count": env_count_row,
+                            "cfg_w1": _maybe_nan(weights_map.get("w1", np.nan)),
+                            "cfg_w2": _maybe_nan(weights_map.get("w2", np.nan)),
+                            "cfg_w3": _maybe_nan(weights_map.get("w3", np.nan)),
+                            "cfg_w4": _maybe_nan(weights_map.get("w4", np.nan)),
+                            "cfg_w_a": _maybe_nan(weights_map.get("w_a", np.nan)),
+                            "cfg_w_o": _maybe_nan(weights_map.get("w_o", np.nan)),
+                            "cfg_weight_schedule": schedule_record,
+                            "cos_overall_mean": float(np.nanmean(mean_slice)),
+                            "cos_overall_std": float(np.nanstd(mean_slice)),
+                        }
+                        for s, (mean_val, std_val) in enumerate(zip(mean_vals, std_vals)):
+                            row[f"cos_mean_s{s}"] = float(np.nanmean(np.asarray(mean_val)))
+                            row[f"cos_std_s{s}"] = float(np.nanmean(np.asarray(std_val)))
+
+                        df_cos = pd.DataFrame([row])
+                        csv_path = pathlib.Path(output_dir) / "cosine_analysis.csv"
+                        header = not csv_path.exists()
+                        df_cos.to_csv(csv_path, mode="a", index=False, header=header)
 
             if variance_art is not None:
-                var_mean = np.asarray(variance_art["episode_mean"])
-                var_std = np.asarray(variance_art["episode_std"])
-                if var_mean.ndim == 1:
-                    var_mean = var_mean[None, :]
-                    var_std = var_std[None, :]
-                if var_mean.shape[0] == 1 and num_methods > 1:
-                    var_mean = np.repeat(var_mean, num_methods, axis=0)
-                    var_std = np.repeat(var_std, num_methods, axis=0)
+                var_mean = _normalize_artifact(variance_art["episode_mean"], num_levels, num_methods)
+                var_std = _normalize_artifact(variance_art["episode_std"], num_levels, num_methods)
                 for method_idx, label in enumerate(method_labels):
-                    if method_idx >= var_mean.shape[0]:
-                        continue
-                    mean_slice = np.asarray(var_mean[method_idx])
-                    std_slice = np.asarray(var_std[method_idx])
-                    if not np.isfinite(mean_slice).any():
-                        continue
-                    mean_vals = mean_slice.reshape(-1)
-                    std_vals = std_slice.reshape(-1)
                     info = variant_info[method_idx]
                     variant_type = info.get("type", "none")
                     env_count_row = int(info.get("env_count", c.num_evals))
@@ -852,31 +899,40 @@ def main(
                         schedule_record = np.nan
                     else:
                         schedule_record = bool(schedule_val)
-                    row = {
-                        "method": label,
-                        "execute_horizon": execute_horizon,
-                        "env_vel": vel_target,
-                        "noise_std": test_noise_std,
-                        "cfg_variant_type": variant_type,
-                        "cfg_env_count": env_count_row,
-                        "cfg_w1": _maybe_nan(weights_map.get("w1", np.nan)),
-                        "cfg_w2": _maybe_nan(weights_map.get("w2", np.nan)),
-                        "cfg_w3": _maybe_nan(weights_map.get("w3", np.nan)),
-                        "cfg_w4": _maybe_nan(weights_map.get("w4", np.nan)),
-                        "cfg_w_a": _maybe_nan(weights_map.get("w_a", np.nan)),
-                        "cfg_w_o": _maybe_nan(weights_map.get("w_o", np.nan)),
-                        "cfg_weight_schedule": schedule_record,
-                        "variance_overall_mean": float(np.nanmean(var_mean[method_idx])),
-                        "variance_overall_std": float(np.nanstd(var_mean[method_idx])),
-                    }
-                    for s, (mean_val, std_val) in enumerate(zip(mean_vals, std_vals)):
-                        row[f"variance_mean_s{s}"] = float(np.nanmean(np.asarray(mean_val)))
-                        row[f"variance_std_s{s}"] = float(np.nanmean(np.asarray(std_val)))
 
-                    df_var = pd.DataFrame([row])
-                    csv_path = pathlib.Path(output_dir) / "action_variance_analysis.csv"
-                    header = not csv_path.exists()
-                    df_var.to_csv(csv_path, mode="a", index=False, header=header)
+                    for level_idx, level_name in enumerate(level_paths):
+                        mean_slice = np.asarray(var_mean[level_idx, method_idx])
+                        std_slice = np.asarray(var_std[level_idx, method_idx])
+                        if not np.isfinite(mean_slice).any():
+                            continue
+                        mean_vals = mean_slice.reshape(-1)
+                        std_vals = std_slice.reshape(-1)
+                        row = {
+                            "level": level_name,
+                            "method": label,
+                            "execute_horizon": execute_horizon,
+                            "env_vel": vel_target,
+                            "noise_std": test_noise_std,
+                            "cfg_variant_type": variant_type,
+                            "cfg_env_count": env_count_row,
+                            "cfg_w1": _maybe_nan(weights_map.get("w1", np.nan)),
+                            "cfg_w2": _maybe_nan(weights_map.get("w2", np.nan)),
+                            "cfg_w3": _maybe_nan(weights_map.get("w3", np.nan)),
+                            "cfg_w4": _maybe_nan(weights_map.get("w4", np.nan)),
+                            "cfg_w_a": _maybe_nan(weights_map.get("w_a", np.nan)),
+                            "cfg_w_o": _maybe_nan(weights_map.get("w_o", np.nan)),
+                            "cfg_weight_schedule": schedule_record,
+                            "variance_overall_mean": float(np.nanmean(mean_slice)),
+                            "variance_overall_std": float(np.nanstd(mean_slice)),
+                        }
+                        for s, (mean_val, std_val) in enumerate(zip(mean_vals, std_vals)):
+                            row[f"variance_mean_s{s}"] = float(np.nanmean(np.asarray(mean_val)))
+                            row[f"variance_std_s{s}"] = float(np.nanmean(np.asarray(std_val)))
+
+                        df_var = pd.DataFrame([row])
+                        csv_path = pathlib.Path(output_dir) / "action_variance_analysis.csv"
+                        header = not csv_path.exists()
+                        df_var.to_csv(csv_path, mode="a", index=False, header=header)
 
         
         def determine_cfg_chunk_size(total_methods: int) -> int:
@@ -1052,33 +1108,35 @@ def main(
     tasks = []
     inference_delay = 1
     # extra horizons at fixed vel/noise
-    for execute_horizon in [2, 4, 6, 8]:
-        tasks.append({
-            "execute_horizon": execute_horizon,
-            "vel_target": 0.0,
-            "noise_std": 0.1,
-            "label": f"extra_horizon"
-        })
-    for execute_horizon in [1,3,5,7]:
-        # velocity sweeps
-        for vel_target in [0.4, 0.8, 1.2]:
-        # for vel_target in [0.7, 1.3]:
-            tasks.append({
-                "execute_horizon": execute_horizon,
-                "vel_target": vel_target,
-                "noise_std": 0.1,
-                "label": f"vel_target={vel_target:.2f}"
-            })
-        # noise sweeps at static target
-        for noisestd in [ 0.1, 0.2, 0.3, 0.4]:
-        # for noisestd in [0.00, 0.4]:
+    if config.default_test:
+        for execute_horizon in [2, 4, 6, 8]:
             tasks.append({
                 "execute_horizon": execute_horizon,
                 "vel_target": 0.0,
-                "noise_std": noisestd,
-                "label": f"noise_std={noisestd:.2f}"
+                "noise_std": 0.1,
+                "label": f"extra_horizon"
             })
-
+        for execute_horizon in [1,3,5,7]:
+            # noise sweeps at static target
+            for noisestd in [ 0.1, 0.2, 0.3, 0.4]:
+            # for noisestd in [0.00, 0.4]:
+                tasks.append({
+                    "execute_horizon": execute_horizon,
+                    "vel_target": 0.0,
+                    "noise_std": noisestd,
+                    "label": f"noise_std={noisestd:.2f}"
+                })
+    if config.test_moving_target:
+        for execute_horizon in [1,3,5,7]:
+        # velocity sweeps
+            for vel_target in [0.4, 0.8, 1.2]:
+            # for vel_target in [0.7, 1.3]:
+                tasks.append({
+                    "execute_horizon": execute_horizon,
+                    "vel_target": vel_target,
+                    "noise_std": 0.1,
+                    "label": f"vel_target={vel_target:.2f}"
+                })
 
 
     # --- Run with timing / ETA ---

@@ -494,7 +494,7 @@ def main(
             
             #raise NotImplementedError("*** Level not recognized DR not implemented **")
         if vel_target==0.0:
-            env=DR_static_wrapper(env,level_paths[0])
+            env = DR_static_wrapper(env, level_paths, levels=levels)
 
         def eval_and_record(c,method_name,weak_state_dicts=None):
             out, _, artifacts = jax.device_get(_eval(c, rngs, levels, state_dicts, weak_state_dicts))

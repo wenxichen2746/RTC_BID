@@ -82,7 +82,7 @@ def main(config: Config):
     static_env_params = static_env_params.replace(screen_dim=cfg_train_expert.SCREEN_DIM)
 
     env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
-    env = DR_static_wrapper(env, config.level_paths[0])
+    env = DR_static_wrapper(env, config.level_paths, levels=levels)
 
     mesh = jax.make_mesh((jax.local_device_count(),), ("level",))
     sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("level"))

@@ -60,6 +60,7 @@ class Config:
     lr: float = 3e-4
     # env_wall_y: float = 0.7   # 0.3 - 5.0
     wandb_name: str = "my-default-experiment-name"
+    act_history_length: int =2
 
 LOG_DIR = pathlib.Path("logs-expert")
 WANDB_PROJECT = "rtc-kinetix-expert"
@@ -93,36 +94,36 @@ def make_squashed_normal_diag(mean, std, num_motor_bindings: int):
     )
     return tfp.distributions.TransformedDistribution(tfp.distributions.MultivariateNormalDiag(mean, std), bijector)
 
-def change_polygon_position_and_velocity(levels, pos_x=None, pos_y=None, vel_x=None, vel_y=None, index=4):
-    # levels: pytree of stacked levels (batched)
-    batch_size = levels.polygon.position.shape[0]
-    new_levels = []
+# def change_polygon_position_and_velocity(levels, pos_x=None, pos_y=None, vel_x=None, vel_y=None, index=4):
+#     # levels: pytree of stacked levels (batched)
+#     batch_size = levels.polygon.position.shape[0]
+#     new_levels = []
 
-    for batch_idx in range(batch_size):
-        level_mod = copy.deepcopy(jax.tree.map(lambda x: x[batch_idx], levels))
+#     for batch_idx in range(batch_size):
+#         level_mod = copy.deepcopy(jax.tree.map(lambda x: x[batch_idx], levels))
 
-        # Get current position and velocity
-        current_pos = level_mod.polygon.position[index]
-        current_vel = level_mod.polygon.velocity[index]
+#         # Get current position and velocity
+#         current_pos = level_mod.polygon.position[index]
+#         current_vel = level_mod.polygon.velocity[index]
 
-        # Set new values or keep old ones
-        new_pos = jnp.array([
-            pos_x if pos_x is not None else current_pos[0],
-            pos_y if pos_y is not None else current_pos[1],
-        ])
-        new_vel = jnp.array([
-            vel_x if vel_x is not None else current_vel[0],
-            vel_y if vel_y is not None else current_vel[1],
-        ])
+#         # Set new values or keep old ones
+#         new_pos = jnp.array([
+#             pos_x if pos_x is not None else current_pos[0],
+#             pos_y if pos_y is not None else current_pos[1],
+#         ])
+#         new_vel = jnp.array([
+#             vel_x if vel_x is not None else current_vel[0],
+#             vel_y if vel_y is not None else current_vel[1],
+#         ])
 
-        # Replace position and velocity
-        new_positions = level_mod.polygon.position.at[index].set(new_pos)
-        new_velocities = level_mod.polygon.velocity.at[index].set(new_vel)
-        new_polygon = replace(level_mod.polygon, position=new_positions, velocity=new_velocities)
-        level_mod = replace(level_mod, polygon=new_polygon)
-        new_levels.append(level_mod)
+#         # Replace position and velocity
+#         new_positions = level_mod.polygon.position.at[index].set(new_pos)
+#         new_velocities = level_mod.polygon.velocity.at[index].set(new_vel)
+#         new_polygon = replace(level_mod.polygon, position=new_positions, velocity=new_velocities)
+#         level_mod = replace(level_mod, polygon=new_polygon)
+#         new_levels.append(level_mod)
 
-    return jax.tree.map(lambda *x: jnp.stack(x), *new_levels)
+#     return jax.tree.map(lambda *x: jnp.stack(x), *new_levels)
 
 
 def randomize_polygon_position(level, index=4):
@@ -265,23 +266,22 @@ def load_levels(paths: Sequence[str], static_env_params: kenv_state.StaticEnvPar
 def main(config: Config):
     static_env_params = kenv_state.StaticEnvParams(**LARGE_ENV_PARAMS, frame_skip=FRAME_SKIP)
     env_params = kenv_state.EnvParams()
+    levels = load_levels(config.level_paths, static_env_params, env_params)
+    static_env_params = static_env_params.replace(screen_dim=SCREEN_DIM)
+
     env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
-    env= DR_static_wrapper(env,config.level_paths[0])
-    
+    env = DR_static_wrapper(env, config.level_paths, levels=levels)
 
     env = BatchEnvWrapper(
         wrappers.LogWrapper(
             PreferenceDiversityRewardWrapper(
             DenseRewardWrapper(
-                wrappers.AutoReplayWrapper(ActObsHistoryWrapper(NoisyActionWrapper(env), act_history_length=8, obs_history_length=1))
+                wrappers.AutoReplayWrapper(ActObsHistoryWrapper(NoisyActionWrapper(env), act_history_length=config.act_history_length, obs_history_length=1))
             )
             )
         ),
         config.num_envs,
     )
-
-    levels = load_levels(config.level_paths, static_env_params, env_params)
-    static_env_params = static_env_params.replace(screen_dim=SCREEN_DIM)
 
     batch_size = config.num_envs * config.num_steps
     assert batch_size % config.num_minibatches == 0, "Batch size must be divisible by number of minibatches"
