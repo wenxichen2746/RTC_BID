@@ -230,49 +230,39 @@ run_with_retry() {
   done
   return 0 # Return a success code
 }
-DATE = "1107"
 
-echo "===== Step 1: Train experts (1001 batch) ====="
+
+
+
 for entry in "${ENV_BATCH_1015[@]}"; do
   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-  RUN_NAME="1107_${ENV_NAME}_a2o1"
-  echo "--- [Step 1] ${RUN_NAME}"
-  run_with_retry uv run src/cfg_train_expert.py  --config.act_history_length 2   --config.level-paths "${LEVEL_PATH}"     --config.wandb_name "${RUN_NAME}"
+  RUN_NAME="1110_${ENV_NAME}_a0o1"
+  BC_RUN_NAME="1110_a6o1_${ENV_NAME}"
+  echo "--- ${RUN_NAME}  ----"
+  
+  # echo "===== Step 1: Train experts ====="
+  # run_with_retry uv run src/cfg_train_expert.py  --config.act_history_length 0   --config.level-paths "${LEVEL_PATH}"     --config.wandb_name "${RUN_NAME}"
+  
+  echo "===== Step 2: Generate domain-randomized data  ====="
+  uv run src/cfg_generate_data_dr.py  --config.act_history_length 6  --config.run-path "./logs-expert/${RUN_NAME}"     --config.level-path "${LEVEL_PATH}"
+  
+  echo "===== Step 3: Train flows ====="
+  uv run src/cfg_train_flow.py  --config.act_history_length 6  --config.run-path "./logs-expert/${RUN_NAME}" --config.level-paths "${LEVEL_PATH}" \
+   --config.wandb_name "${BC_RUN_NAME}"
 done
 
-echo "
-===== Step 2: Generate domain-randomized data (1001 batch) ====="
-for entry in "${ENV_BATCH_1015[@]}"; do
-  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-  RUN_NAME="1107_${ENV_NAME}_a2o1"
-  echo "--- [Step 2] ${RUN_NAME}"
-  uv run src/cfg_generate_data_dr.py  --config.act_history_length 2   --config.run-path "./logs-expert/${RUN_NAME}"     --config.level-path "${LEVEL_PATH}"
-done
-
+PYTHONPATH=src python3 src/util/merge_bc_policies.py \
+  --source-root logs-bc \
+  --target-root logs-bc/1110_a6o1_4envs \
+  --run-prefix 1110_a6o1_ \
+  --iterations 5 35
 
 
 echo "
-===== Step 3: Train flows (1001 batch) ====="
-for entry in "${ENV_BATCH_1015[@]}"; do
-  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-  RUN_NAME="1107_${ENV_NAME}_a2o1"
-  echo "--- [Step 3] ${RUN_NAME}"
-  run_with_retry uv run src/cfg_train_flow.py  --config.act_history_length 2  --config.run-path "./logs-expert/${RUN_NAME}" --config.level-paths "${LEVEL_PATH}" --config.wandb_name "${RUN_NAME}"
-done
-
-# run_with_retry uv run src/cfg_eval_flow.py --run_path ./logs-bc/run1015 --level-paths "worlds/l/catapult.json" "worlds/c/place_can_easy.json" "worlds/c/toss_bin.json" "worlds/l/grasp_easy.json" --output-dir ./logs-eval-cfg/1015_4envs  --config.test-moving-target False
-
-# echo "
-# ===== Step 4: Evaluate flows (1001 batch) ====="
-# for entry in "${ENV_BATCH_1015[@]}"; do
-#   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-#   RUN_NAME="1022_${ENV_NAME}_a8o1"
-#   echo "--- [Step 4] ${RUN_NAME}"
-#   run_with_retry uv run src/cfg_eval_flow.py --run_path "./logs-bc/${RUN_NAME}" --level-paths "${LEVEL_PATH}" --output-dir "./logs-eval-cfg/${RUN_NAME}" --config.default_test False
-# done
-
-echo "
-All steps completed."
+===== Step 4: Evaluate flows ====="
 
 
-uv run src/cfg_eval_flow.py --run_path ./logs-bc/run1015 --level-paths "worlds/l/catapult.json" "worlds/c/place_can_easy.json" "worlds/c/toss_bin.json" "worlds/l/grasp_easy.json" --output-dir ./logs-eval-cfg/1022_4envs  
+
+uv run src/cfg_eval_flow.py --run_path ./logs-bc/1110_a6o1_4envs \
+ --config.act_history_length 6  --level-paths "worlds/l/catapult.json" "worlds/c/place_can_easy.json" "worlds/c/toss_bin.json" "worlds/l/grasp_easy.json" \
+  --output-dir ./logs-eval-cfg/1110_4envs_a6 

@@ -81,13 +81,19 @@ def main(config: Config):
     levels = cfg_train_expert.load_levels(config.level_paths, static_env_params, env_params)
     static_env_params = static_env_params.replace(screen_dim=cfg_train_expert.SCREEN_DIM)
 
+    eval_config = dataclasses.replace(
+        config.eval,
+        obs_history_length=config.obs_history_length,
+        act_history_length=config.act_history_length,
+    )
+
     env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
-    env = DR_static_wrapper(env, config.level_paths, levels=levels)
+    # env = DR_static_wrapper(env, config.level_paths, levels=levels)
 
     mesh = jax.make_mesh((jax.local_device_count(),), ("level",))
     sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("level"))
 
-    action_chunk_size = config.eval.model.action_chunk_size
+    action_chunk_size = eval_config.model.action_chunk_size
 
     # load data
     def load_data(level_path: str):
@@ -121,16 +127,26 @@ def main(config: Config):
     data: generate_data.Data = generate_data.Data(**data)
     print(f"Truncated data to {data.obs.shape[1]:_} steps ({valid_steps // config.batch_size:_} batches)")
 
-    obs_dim_context = data.obs.shape[-1]
+    context_dim = data.obs.shape[-1]
     action_dim = env.action_space(env_params).shape[0]
 
     context_act_len = config.act_history_length * action_dim
-    assert context_act_len <= obs_dim_context
-    context_obs_len = obs_dim_context - context_act_len
-    context_dim = obs_dim_context
+    assert context_act_len <= context_dim
+    context_obs_len = context_dim - context_act_len
+
 
     context_obs_index = (0, context_obs_len)
     context_act_index = (context_obs_len, context_obs_len + context_act_len)
+    print("-" * 30)
+    print(f"**Debug Dimensions and Indices**")
+    print(f"Data Observation Shape: {data.obs.shape}")
+    print(f"Context Dimension (context_dim): {context_dim}")
+    print(f"Action Dimension (action_dim): {action_dim}")
+    print(f"Context Action Length (context_act_len): {context_act_len}")
+    print(f"Context Observation Length (context_obs_len): {context_obs_len}")
+    print(f"Context Observation Index (context_obs_index): {context_obs_index}")
+    print(f"Context Action Index (context_act_index): {context_act_index}")
+    print("-" * 30)
 
     @functools.partial(jax.jit, in_shardings=sharding, out_shardings=sharding)
     @jax.vmap
@@ -139,7 +155,7 @@ def main(config: Config):
         policy = _model.FlowPolicyCFG2(
             context_dim=context_dim,
             action_dim=action_dim,
-            config=config.eval.model,
+            config=eval_config.model,
             rngs=nnx.Rngs(key),
             context_act_index=context_act_index,
             context_obs_index=context_obs_index,
@@ -209,9 +225,9 @@ def main(config: Config):
         rng, key = jax.random.split(rng)
         eval_policy, _ = nnx.merge(epoch_carry.graphdef, train_state)
         eval_info = {}
-        for horizon in range(1, config.eval.model.action_chunk_size + 1):
-            eval_config = dataclasses.replace(config.eval, execute_horizon=horizon)
-            info, _, _ = _eval.eval(eval_config, env, key, level, eval_policy, env_params, static_env_params)
+        for horizon in range(1, eval_config.model.action_chunk_size + 1):
+            horizon_eval_config = dataclasses.replace(eval_config, execute_horizon=horizon)
+            info, _, _ = _eval.eval(horizon_eval_config, env, key, level, eval_policy, env_params, static_env_params)
             eval_info.update({f"{k}_{horizon}": v for k, v in info.items()})
         video = None
         return EpochCarry(rng, train_state, epoch_carry.graphdef), ({**train_info, **eval_info}, video)

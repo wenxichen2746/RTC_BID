@@ -124,7 +124,7 @@ class FlowPolicyCFG2(nnx.Module):
         assert 0 <= c <= d <= context_dim
         self.act_start, self.act_end = int(a), int(b)
         self.obs_start, self.obs_end = int(c), int(d)
-        assert (self.act_start < self.act_end) and (self.obs_start < self.obs_end)
+        assert (self.act_start <= self.act_end) and (self.obs_start < self.obs_end)
         assert (self.act_start, self.act_end) != (self.obs_start, self.obs_end), "slices must not be identical"
 
         act_slice_dim = self.act_end - self.act_start

@@ -65,6 +65,16 @@ def main(config: Config):
     env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
     env= DR_static_wrapper(env,config.level_path)
 
+    sample_obs, _ = env.reset_to_level(jax.random.key(config.seed + 1), level, env_params)
+    if sample_obs.ndim != 1:
+        raise ValueError(f"Expected pre-wrapper observation to be 1D, got shape {sample_obs.shape}.")
+    base_obs_dim = int(sample_obs.shape[0])
+    if config.obs_history_length < 1:
+        raise ValueError("obs_history_length must be at least 1 when replaying expert policies.")
+    stacked_obs_dim = config.obs_history_length * base_obs_dim
+    latest_obs_start = stacked_obs_dim - base_obs_dim
+    latest_obs_end = stacked_obs_dim
+
     env = cfg_train_expert.BatchEnvWrapper(
         wrappers.LogWrapper(
             wrappers.AutoReplayWrapper(
@@ -101,6 +111,21 @@ def main(config: Config):
         print(
             f"\t{seed_dir.name}: {level_stats['returned_episode_solved'][chosen_idx]:.3f} {'[MASKED]' if not good_policy_mask[-1] else ''}"
         )
+    if not state_dicts:
+        raise ValueError(f"No expert policies found under {config.run_path}.")
+
+    def infer_policy_obs_dim(policy_state):
+        actor_layers = policy_state["actor"]["layers"]
+        first_layer_key = sorted(actor_layers.keys())[0]
+        kernel = actor_layers[first_layer_key]["kernel"]
+        return int(kernel.shape[0])
+
+    policy_obs_dim = infer_policy_obs_dim(state_dicts[0])
+    if policy_obs_dim != base_obs_dim:
+        raise ValueError(
+            f"Expert expects obs dim {policy_obs_dim}, but env without wrappers provides {base_obs_dim}. "
+            "Ensure you trained the expert with obs_history_length=1 and act_history_length=0."
+        )
     state_dicts = jax.tree.map(lambda *x: jnp.array(x), *state_dicts)
     good_policy_mask = jnp.array(good_policy_mask)
     state_dicts, good_policy_mask = jax.device_put((state_dicts, good_policy_mask))
@@ -122,15 +147,15 @@ def main(config: Config):
     def step_n(carry: StepCarry, state_dict: dict, good_policy_mask: jax.Array, n: int):
         def step(carry: StepCarry, _):
             action_dim = env.action_space(env_params).shape[0]
-            obs_dim = carry.obs.shape[1]
 
             @jax.vmap
             def get_action(key, obs, policy_idx):
-                agent = cfg_train_expert.Agent(obs_dim, action_dim, 1, rngs=nnx.Rngs(0))
+                agent = cfg_train_expert.Agent(base_obs_dim, action_dim, 1, rngs=nnx.Rngs(0))
                 graphdef, state = nnx.split(agent)
                 state.replace_by_pure_dict(jax.tree.map(lambda x: x[policy_idx], state_dict))
                 agent = nnx.merge(graphdef, state)
-                mean, std = agent.action(obs)
+                agent_obs = obs[..., latest_obs_start:latest_obs_end]
+                mean, std = agent.action(agent_obs)
                 if config.action_sample_std is not None:
                     std = jnp.full_like(mean, config.action_sample_std)
                 action_dist = cfg_train_expert.make_squashed_normal_diag(mean, std, static_env_params.num_motor_bindings)

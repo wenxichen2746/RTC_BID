@@ -119,12 +119,15 @@ class ActObsHistoryWrapper(wrappers.UnderspecifiedEnvWrapper):
         super().__init__(env)
         self.obs_history_length = obs_history_length
         self.act_history_length = act_history_length
+        self._passthrough = act_history_length == 0
 
     def step_env(self, key, state: ActObsHistoryState, action, params):
         obs, env_state, reward, done, info = self._env.step_env(key, state.env_state, action, params)
         stacked_obs = jnp.roll(state.stacked_obs, -1, axis=0).at[-1].set(obs)
-        stacked_act = jnp.roll(state.stacked_act, -1, axis=0).at[-1].set(action)
-        actobs = jnp.concatenate([stacked_obs.flatten(), stacked_act.flatten()])
+        stacked_act = (
+            jnp.roll(state.stacked_act, -1, axis=0).at[-1].set(action) if self.act_history_length > 0 else state.stacked_act
+        )
+        actobs = self._format_observation(obs, stacked_obs, stacked_act)
         return actobs, ActObsHistoryState(env_state, stacked_obs, stacked_act, obs), reward, done, info
 
     def reset_to_level(self, rng, level, params):
@@ -132,7 +135,7 @@ class ActObsHistoryWrapper(wrappers.UnderspecifiedEnvWrapper):
         stacked_obs = jnp.repeat(obs[None], self.obs_history_length, axis=0)
         act_dim = self._env.action_space(params).shape[0]
         stacked_act = jnp.zeros((self.act_history_length, act_dim), dtype=obs.dtype)
-        actobs = jnp.concatenate([stacked_obs.flatten(), stacked_act.flatten()])
+        actobs = self._format_observation(obs, stacked_obs, stacked_act)
         return actobs, ActObsHistoryState(env_state, stacked_obs, stacked_act, obs)
 
     def action_space(self, params):
@@ -156,6 +159,14 @@ class ActObsHistoryWrapper(wrappers.UnderspecifiedEnvWrapper):
             env_state = env_state.env_state
         return env_state.stacked_act
 
+    def _format_observation(self, obs, stacked_obs, stacked_act):
+        if self._passthrough:
+            return obs
+        parts = [stacked_obs.flatten()]
+        if self.act_history_length > 0:
+            parts.append(stacked_act.flatten())
+        return jnp.concatenate(parts)
+
 
 @struct.dataclass
 class NoisyActObsHistoryState:
@@ -177,14 +188,17 @@ class NoisyActObsHistoryWrapper(wrappers.UnderspecifiedEnvWrapper):
         self.obs_history_length = obs_history_length
         self.act_history_length = act_history_length
         self.noise_std = noise_std
+        self._passthrough = act_history_length == 0
 
     def step_env(self, key, state: NoisyActObsHistoryState, action, params):
         noise_key, env_key = jax.random.split(key)
         noisy_action = action + jax.random.normal(noise_key, action.shape) * self.noise_std if self.noise_std else action
         obs, env_state, reward, done, info = self._env.step_env(env_key, state.env_state, noisy_action, params)
         stacked_obs = jnp.roll(state.stacked_obs, -1, axis=0).at[-1].set(obs)
-        stacked_act = jnp.roll(state.stacked_act, -1, axis=0).at[-1].set(action)
-        actobs = jnp.concatenate([stacked_obs.flatten(), stacked_act.flatten()])
+        stacked_act = (
+            jnp.roll(state.stacked_act, -1, axis=0).at[-1].set(action) if self.act_history_length > 0 else state.stacked_act
+        )
+        actobs = self._format_observation(obs, stacked_obs, stacked_act)
         return actobs, NoisyActObsHistoryState(env_state, stacked_obs, stacked_act, obs), reward, done, info
 
     def reset_to_level(self, rng, level, params):
@@ -192,7 +206,7 @@ class NoisyActObsHistoryWrapper(wrappers.UnderspecifiedEnvWrapper):
         stacked_obs = jnp.repeat(obs[None], self.obs_history_length, axis=0)
         act_dim = self._env.action_space(params).shape[0]
         stacked_act = jnp.zeros((self.act_history_length, act_dim), dtype=obs.dtype)
-        actobs = jnp.concatenate([stacked_obs.flatten(), stacked_act.flatten()])
+        actobs = self._format_observation(obs, stacked_obs, stacked_act)
         return actobs, NoisyActObsHistoryState(env_state, stacked_obs, stacked_act, obs)
 
     def action_space(self, params):
@@ -215,6 +229,14 @@ class NoisyActObsHistoryWrapper(wrappers.UnderspecifiedEnvWrapper):
         while not isinstance(env_state, NoisyActObsHistoryState):
             env_state = env_state.env_state
         return env_state.stacked_act
+
+    def _format_observation(self, obs, stacked_obs, stacked_act):
+        if self._passthrough:
+            return obs
+        parts = [stacked_obs.flatten()]
+        if self.act_history_length > 0:
+            parts.append(stacked_act.flatten())
+        return jnp.concatenate(parts)
 
 
 # ---------------- Target Attraction Shaping ----------------
