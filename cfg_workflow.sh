@@ -210,59 +210,63 @@
 
 
 
-ENV_BATCH_1015=(
+# run_with_retry() {
+#   local retry_count=0
+#   until "$@"
+#   do
+#     retry_count=$((retry_count + 1))
+#     if [[ ${retry_count} -ge ${MAX_RETRIES} ]]; then
+#       echo "!!!!!! Command failed after ${MAX_RETRIES} attempts. Moving on. !!!!!!"
+#       return 1 # Return a failure code
+#     fi
+#     echo "****** Command failed. Retrying in ${RETRY_DELAY}s (Attempt ${retry_count}/${MAX_RETRIES}) ******"
+#     sleep ${RETRY_DELAY}
+#   done
+#   return 0 # Return a success code
+# }
+
+ENV_BATCH=(
   "grasp_easy worlds/l/grasp_easy.json"
   "place_can_easy worlds/c/place_can_easy.json"
   "toss_bin worlds/c/toss_bin.json" 
   "catapult worlds/l/catapult.json"
 )
-run_with_retry() {
-  local retry_count=0
-  until "$@"
-  do
-    retry_count=$((retry_count + 1))
-    if [[ ${retry_count} -ge ${MAX_RETRIES} ]]; then
-      echo "!!!!!! Command failed after ${MAX_RETRIES} attempts. Moving on. !!!!!!"
-      return 1 # Return a failure code
-    fi
-    echo "****** Command failed. Retrying in ${RETRY_DELAY}s (Attempt ${retry_count}/${MAX_RETRIES}) ******"
-    sleep ${RETRY_DELAY}
+
+DATE="1123"
+preference_norm_facctor="7"
+for act_history_length in 0 2 4; do
+  for entry in "${ENV_BATCH[@]}"; do
+    IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+    RUN_NAME="${DATE}_${ENV_NAME}_pre_${preference_norm_facctor}_a0o1"
+    BC_RUN_NAME="${DATE}_a${act_history_length}o1_pre${preference_norm_facctor}_${ENV_NAME}"
+    echo "--- ${RUN_NAME}  ----"
+    
+    echo "===== Step 1: Train experts ====="
+    uv run src/cfg_train_expert.py  --config.act_history_length "${act_history_length}" \
+    --config.preference_norm_facctor "${preference_norm_facctor}"   \
+    --config.level-paths "${LEVEL_PATH}"   \
+    --config.wandb_name "${RUN_NAME}"
+    
+    echo "===== Step 2: Generate domain-randomized data  ====="
+    uv run src/cfg_generate_data_dr.py  --config.act_history_length "${act_history_length}" --config.run-path "./logs-expert/${RUN_NAME}"     --config.level-path "${LEVEL_PATH}"
+    
+    echo "===== Step 3: Train flows ====="
+    uv run src/cfg_train_flow.py  --config.act_history_length "${act_history_length}"  --config.run-path "./logs-expert/${RUN_NAME}" --config.level-paths "${LEVEL_PATH}" \
+    --config.wandb_name "${BC_RUN_NAME}"
   done
-  return 0 # Return a success code
-}
-
-
-
-
-for entry in "${ENV_BATCH_1015[@]}"; do
-  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-  RUN_NAME="1110_${ENV_NAME}_a0o1"
-  BC_RUN_NAME="1110_a6o1_${ENV_NAME}"
-  echo "--- ${RUN_NAME}  ----"
-  
-  # echo "===== Step 1: Train experts ====="
-  # run_with_retry uv run src/cfg_train_expert.py  --config.act_history_length 0   --config.level-paths "${LEVEL_PATH}"     --config.wandb_name "${RUN_NAME}"
-  
-  echo "===== Step 2: Generate domain-randomized data  ====="
-  uv run src/cfg_generate_data_dr.py  --config.act_history_length 6  --config.run-path "./logs-expert/${RUN_NAME}"     --config.level-path "${LEVEL_PATH}"
-  
-  echo "===== Step 3: Train flows ====="
-  uv run src/cfg_train_flow.py  --config.act_history_length 6  --config.run-path "./logs-expert/${RUN_NAME}" --config.level-paths "${LEVEL_PATH}" \
-   --config.wandb_name "${BC_RUN_NAME}"
-done
-
-PYTHONPATH=src python3 src/util/merge_bc_policies.py \
+  PYTHONPATH=src python3 src/util/merge_bc_policies.py \
   --source-root logs-bc \
-  --target-root logs-bc/1110_a6o1_4envs \
-  --run-prefix 1110_a6o1_ \
+  --target-root "logs-bc/${DATE}_a${act_history_length}o1_4envs"  \
+  --run-prefix "${DATE}_a${act_history_length}o1_" \
   --iterations 5 35
 
+  echo "
+  ===== Step 4: Evaluate flows ====="
 
-echo "
-===== Step 4: Evaluate flows ====="
+  uv run src/cfg_eval_flow.py --run_path "./logs-bc/${DATE}_a${act_history_length}o1_4envs" \
+  --config.act_history_length "${act_history_length}"  \
+  --level-paths "worlds/l/catapult.json" "worlds/c/place_can_easy.json" "worlds/c/toss_bin.json" "worlds/l/grasp_easy.json" \
+  --output-dir "./logs-eval-cfg/${DATE}_pre${preference_norm_facctor}_4envs_a${act_history_length}"
 
+done
 
-
-uv run src/cfg_eval_flow.py --run_path ./logs-bc/1110_a6o1_4envs \
- --config.act_history_length 6  --level-paths "worlds/l/catapult.json" "worlds/c/place_can_easy.json" "worlds/c/toss_bin.json" "worlds/l/grasp_easy.json" \
-  --output-dir ./logs-eval-cfg/1110_4envs_a6 
