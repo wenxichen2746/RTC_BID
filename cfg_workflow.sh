@@ -232,20 +232,28 @@ ENV_BATCH=(
   "catapult worlds/l/catapult.json"
 )
 
-DATE="1123"
-preference_norm_facctor="7"
-for act_history_length in 0 2 4; do
+DATE="1127"
+preference_norm_factor="7"
+
+for entry in "${ENV_BATCH[@]}"; do
+  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+  RUN_NAME="${DATE}_${ENV_NAME}_pre_${preference_norm_factor}_a0o1"
+  echo "--- ${RUN_NAME}  ----"
+  
+  echo "===== Step 1: Train experts ====="
+  uv run src/cfg_train_expert.py  \
+  --config.preference_norm_factor "${preference_norm_factor}"   \
+  --config.level-paths "${LEVEL_PATH}"   \
+  --config.wandb_name "${RUN_NAME}"
+done
+
+for act_history_length in 2 4; do
   for entry in "${ENV_BATCH[@]}"; do
     IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-    RUN_NAME="${DATE}_${ENV_NAME}_pre_${preference_norm_facctor}_a0o1"
-    BC_RUN_NAME="${DATE}_a${act_history_length}o1_pre${preference_norm_facctor}_${ENV_NAME}"
+    RUN_NAME="${DATE}_${ENV_NAME}_pre_${preference_norm_factor}_a0o1"
+    BC_RUN_NAME="${DATE}_a${act_history_length}o1_pre${preference_norm_factor}_${ENV_NAME}"
     echo "--- ${RUN_NAME}  ----"
     
-    echo "===== Step 1: Train experts ====="
-    uv run src/cfg_train_expert.py  --config.act_history_length "${act_history_length}" \
-    --config.preference_norm_facctor "${preference_norm_facctor}"   \
-    --config.level-paths "${LEVEL_PATH}"   \
-    --config.wandb_name "${RUN_NAME}"
     
     echo "===== Step 2: Generate domain-randomized data  ====="
     uv run src/cfg_generate_data_dr.py  --config.act_history_length "${act_history_length}" --config.run-path "./logs-expert/${RUN_NAME}"     --config.level-path "${LEVEL_PATH}"
@@ -266,7 +274,6 @@ for act_history_length in 0 2 4; do
   uv run src/cfg_eval_flow.py --run_path "./logs-bc/${DATE}_a${act_history_length}o1_4envs" \
   --config.act_history_length "${act_history_length}"  \
   --level-paths "worlds/l/catapult.json" "worlds/c/place_can_easy.json" "worlds/c/toss_bin.json" "worlds/l/grasp_easy.json" \
-  --output-dir "./logs-eval-cfg/${DATE}_pre${preference_norm_facctor}_4envs_a${act_history_length}"
+  --output-dir "./logs-eval-cfg/${DATE}_pre${preference_norm_factor}_4envs_a${act_history_length}"
 
 done
-

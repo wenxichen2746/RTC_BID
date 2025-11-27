@@ -60,8 +60,8 @@ class Config:
     lr: float = 3e-4
     # env_wall_y: float = 0.7   # 0.3 - 5.0
     wandb_name: str = "my-default-experiment-name"
-    act_history_length: int =2
-    preference_norm_facctor: int = 9 # =6 is same with default dense reward, the higher the lesser impact from preference wrapper
+    act_history_length: int =0
+    preference_norm_factor: int = 9 # =6 is same with default dense reward, the higher the lesser impact from preference wrapper
 
 
 
@@ -282,7 +282,7 @@ def main(config: Config):
             DenseRewardWrapper(
                 wrappers.AutoReplayWrapper(ActObsHistoryWrapper(NoisyActionWrapper(env), act_history_length=config.act_history_length, obs_history_length=1))
             )
-            ,norm_factor=config.preference_norm_facctor)
+            ,norm_factor=config.preference_norm_factor)
         ),
         config.num_envs,
     )
