@@ -233,7 +233,7 @@ ENV_BATCH=(
 )
 
 DATE="1127"
-preference_norm_factor="7"
+preference_norm_factor="12"
 
 for entry in "${ENV_BATCH[@]}"; do
   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
