@@ -232,20 +232,20 @@ ENV_BATCH=(
   "catapult worlds/l/catapult.json"
 )
 
-DATE="1127"
-preference_norm_factor="12"
+DATE="0101_noiseinitialnullvector"
+preference_norm_factor="7"
 
-for entry in "${ENV_BATCH[@]}"; do
-  IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
-  RUN_NAME="${DATE}_${ENV_NAME}_pre_${preference_norm_factor}_a0o1"
-  echo "--- ${RUN_NAME}  ----"
+# for entry in "${ENV_BATCH[@]}"; do
+#   IFS=' ' read -r ENV_NAME LEVEL_PATH <<< "${entry}"
+#   RUN_NAME="${DATE}_${ENV_NAME}_pre_${preference_norm_factor}_a0o1"
+#   echo "--- ${RUN_NAME}  ----"
   
-  echo "===== Step 1: Train experts ====="
-  uv run src/cfg_train_expert.py  \
-  --config.preference_norm_factor "${preference_norm_factor}"   \
-  --config.level-paths "${LEVEL_PATH}"   \
-  --config.wandb_name "${RUN_NAME}"
-done
+#   echo "===== Step 1: Train experts ====="
+#   uv run src/cfg_train_expert.py  \
+#   --config.preference_norm_factor "${preference_norm_factor}"   \
+#   --config.level-paths "${LEVEL_PATH}"   \
+#   --config.wandb_name "${RUN_NAME}"
+# done
 
 for act_history_length in 2 4; do
   for entry in "${ENV_BATCH[@]}"; do

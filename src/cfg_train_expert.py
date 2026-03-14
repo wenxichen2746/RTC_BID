@@ -98,87 +98,7 @@ def make_squashed_normal_diag(mean, std, num_motor_bindings: int):
     )
     return tfp.distributions.TransformedDistribution(tfp.distributions.MultivariateNormalDiag(mean, std), bijector)
 
-# def change_polygon_position_and_velocity(levels, pos_x=None, pos_y=None, vel_x=None, vel_y=None, index=4):
-#     # levels: pytree of stacked levels (batched)
-#     batch_size = levels.polygon.position.shape[0]
-#     new_levels = []
 
-#     for batch_idx in range(batch_size):
-#         level_mod = copy.deepcopy(jax.tree.map(lambda x: x[batch_idx], levels))
-
-#         # Get current position and velocity
-#         current_pos = level_mod.polygon.position[index]
-#         current_vel = level_mod.polygon.velocity[index]
-
-#         # Set new values or keep old ones
-#         new_pos = jnp.array([
-#             pos_x if pos_x is not None else current_pos[0],
-#             pos_y if pos_y is not None else current_pos[1],
-#         ])
-#         new_vel = jnp.array([
-#             vel_x if vel_x is not None else current_vel[0],
-#             vel_y if vel_y is not None else current_vel[1],
-#         ])
-
-#         # Replace position and velocity
-#         new_positions = level_mod.polygon.position.at[index].set(new_pos)
-#         new_velocities = level_mod.polygon.velocity.at[index].set(new_vel)
-#         new_polygon = replace(level_mod.polygon, position=new_positions, velocity=new_velocities)
-#         level_mod = replace(level_mod, polygon=new_polygon)
-#         new_levels.append(level_mod)
-
-#     return jax.tree.map(lambda *x: jnp.stack(x), *new_levels)
-
-
-def randomize_polygon_position(level, index=4):
-    # Make a deepcopy so original level is not modified
-    level_mod = copy.deepcopy(level)
-    
-    key = jax.random.PRNGKey(0)
-    key, key_x, key_y = jax.random.split(key, 3)
-    rand_x = jax.random.uniform(key_x, (), minval=0.1, maxval=1.0)  # Example range for x
-    rand_y = jax.random.uniform(key_y, (), minval=2.0, maxval=5.0)  # Example range for y
-    
-    current_pos = level_mod.polygon.position[index]
-    rand_pos = jnp.array([
-        current_pos[0],
-        rand_y
-    ])
-    
-    # Change position of the 5th polygon
-    new_pos = jnp.array([current_pos[0], 2.0])
-    new_positions = level_mod.polygon.position.at[index].set(new_pos)
-    new_polygon = replace(level_mod.polygon, position=new_positions)
-    level_mod = replace(level_mod, polygon=new_polygon)
-
-    # level_mod.polygon.position = level_mod.polygon.position.at[index].set(new_pos) 
-
-    # You can randomize here with np.random.uniform(), etc.
-    return level_mod
-
-
-def change_polygon_position(levels, pos_x, pos_y,index=4):
-    # levels: pytree of stacked levels (batched)
-    # This function expects levels to be a pytree with batch as first dim
-    batch_size = levels.polygon.position.shape[0]
-    new_levels = []
-    for batch_idx in range(batch_size):
-        level_mod = copy.deepcopy(jax.tree.map(lambda x: x[batch_idx], levels))
-        key = jax.random.PRNGKey(batch_idx)
-        key, key_x, key_y = jax.random.split(key, 3)
-
-        # rand_x = jax.random.uniform(key_x, (), minval=0.1, maxval=1.0)
-        # rand_y = jax.random.uniform(key_y, (), minval=0.7, maxval=5.0)
-
-        current_pos = level_mod.polygon.position[index]
-
-        new_pos = jnp.array([current_pos[0], pos_y])
-        new_positions = level_mod.polygon.position.at[index].set(new_pos)
-        new_polygon = replace(level_mod.polygon, position=new_positions)
-        level_mod = replace(level_mod, polygon=new_polygon)
-        new_levels.append(level_mod)
-    # Stack back into a batch
-    return jax.tree.map(lambda *x: jnp.stack(x), *new_levels)
 
 class Agent(nnx.Module):
     def __init__(self, obs_dim: int, action_dim: int, layer_width: int, *, rngs: nnx.Rngs):
@@ -274,7 +194,7 @@ def main(config: Config):
     static_env_params = static_env_params.replace(screen_dim=SCREEN_DIM)
 
     env = kenv.make_kinetix_env_from_name("Kinetix-Symbolic-Continuous-v1", static_env_params=static_env_params)
-    env = DR_static_wrapper(env, config.level_paths, levels=levels)
+    # env = DR_static_wrapper(env, config.level_paths, levels=levels)
 
     env = BatchEnvWrapper(
         wrappers.LogWrapper(

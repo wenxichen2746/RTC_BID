@@ -131,8 +131,11 @@ class FlowPolicyCFG2(nnx.Module):
         obs_slice_dim = self.obs_end - self.obs_start
 
         # Learnable null vectors for the two context portions
-        self.null_act_embed = nnx.Param(jnp.zeros((act_slice_dim,), dtype=jnp.float32))
-        self.null_obs_embed = nnx.Param(jnp.zeros((obs_slice_dim,), dtype=jnp.float32))
+        params_key = rngs.params() if callable(getattr(rngs, "params", None)) else rngs.params
+        key_act, key_obs = jax.random.split(params_key, 2)
+        init_std = 0.02
+        self.null_act_embed = nnx.Param(jax.random.normal(key_act, (act_slice_dim,), dtype=jnp.float32) * init_std)
+        self.null_obs_embed = nnx.Param(jax.random.normal(key_obs, (obs_slice_dim,), dtype=jnp.float32) * init_std)
 
         # Same backbone as FlowPolicy
         self.in_proj = nnx.Linear(action_dim + context_dim, config.channel_dim, rngs=rngs)
@@ -165,6 +168,7 @@ class FlowPolicyCFG2(nnx.Module):
     ) -> jax.Array:
         # Split out the two slices
         ctx = context
+        assert self.act_end <= self.obs_start or self.obs_end <= self.act_start
         act_slice = ctx[:, self.act_start:self.act_end]   # [B, A]
         obs_slice = ctx[:, self.obs_start:self.obs_end]   # [B, O]
         

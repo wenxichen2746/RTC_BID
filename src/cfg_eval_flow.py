@@ -1046,20 +1046,20 @@ def main(
 
 
         # cfg_coef = list(np.arange(1, 7.1, 0.5))
-        cfg_coef = list(np.arange(1, 4.1, 0.5))
+        cfg_coef = list(np.arange(1, 4.1, 1.0))
         cfg_method_specs = []
         cfg_method_names = []
 
-        for w in cfg_coef + [0, -1, -2]:
-            w_ao = w
-            w_o = 1 - w
-            cfg_method_specs.append((0.0, 0.0, w_o, w_ao))
-            cfg_method_names.append(f"cfg_BF:wa{w}")
+        # for w in cfg_coef + [0, -1, -2]:
+        #     w_ao = w
+        #     w_o = 1 - w
+        #     cfg_method_specs.append((0.0, 0.0, w_o, w_ao))
+        #     cfg_method_names.append(f"cfg_BF:wa{w}")
 
         for w in cfg_coef:
-            w_nn = 1 - w - w
-            cfg_method_specs.append((w_nn, w, w, 0.0))
-            cfg_method_names.append(f"cfg_BI:w{w}")
+            # w_nn = 1 - w - w
+            # cfg_method_specs.append((w_nn, w, w, 0.0))
+            # cfg_method_names.append(f"cfg_BI:w{w}")
 
             w_nn_alt = 1 - w - 1
             cfg_method_specs.append((w_nn_alt, 1.0, w, 0.0))
@@ -1128,17 +1128,17 @@ def main(
                     "noise_std": noisestd,
                     "label": f"noise_std={noisestd:.2f}"
                 })
-    if config.test_moving_target:
-        for execute_horizon in [1,3,5,7]:
-        # velocity sweeps
-            for vel_target in [0.4, 0.8, 1.2]:
-            # for vel_target in [0.7, 1.3]:
-                tasks.append({
-                    "execute_horizon": execute_horizon,
-                    "vel_target": vel_target,
-                    "noise_std": 0.1,
-                    "label": f"vel_target={vel_target:.2f}"
-                })
+    # if config.test_moving_target:
+    #     for execute_horizon in [1,3,5,7]:
+    #     # velocity sweeps
+    #         for vel_target in [0.4, 0.8, 1.2]:
+    #         # for vel_target in [0.7, 1.3]:
+    #             tasks.append({
+    #                 "execute_horizon": execute_horizon,
+    #                 "vel_target": vel_target,
+    #                 "noise_std": 0.1,
+    #                 "label": f"vel_target={vel_target:.2f}"
+    #             })
 
 
     # --- Run with timing / ETA ---
